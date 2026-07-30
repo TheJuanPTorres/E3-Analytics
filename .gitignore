@@ -17,3 +17,6 @@ desktop.ini
 *.log
 *.bak
 *.tmp
+
+# Artefactos de empaquetado (los genera git archive)
+*.zip

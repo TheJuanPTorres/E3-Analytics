@@ -31,8 +31,43 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  *       UN SOLO period por invocación: con el N+1 de completación sin arreglar,
  *       recorrer todos los presets en producción sería un incidente.
  *
+ *   ?page=e3-analytics-dashboard&e3a_diag=compare&period=7&mode=legacy
+ *       Un solo modo. Es la ÚNICA forma de medir costo (ver abajo).
+ *
  * Guarda: manage_options Y (opción e3a_diag_enabled O constante E3A_DIAG).
  * Sin las dos, el parámetro se ignora por completo.
+ *
+ * ---------------------------------------------------------------------------
+ * HALLAZGO: los tiempos y conteos de queries de una corrida multi-modo mienten
+ * ---------------------------------------------------------------------------
+ * La primera corrida de period=7 con los 3 modos en un mismo request dio:
+ *
+ *     legacy         0.68 s   169 queries
+ *     calendar       0.03 s    16 queries
+ *     calendar_utc   0.03 s    16 queries
+ *
+ * Imposible como diferencia real: el modo solo cambia los límites de fecha, y la
+ * diferencia de inscripciones entre modos (69 vs 62) explica un 10%, no un 1.000%.
+ *
+ * Causa: el object cache NO persistente de WordPress, el que vive en memoria
+ * durante el request y respalda get_post_meta() / get_userdata() / get_the_title().
+ * El primer modo que corre paga todas las lecturas que hace Tutor LMS dentro de
+ * course_progress_percent() y de is_completed_course(); los modos siguientes las
+ * encuentran calientes. $wpdb->num_queries solo cuenta SQL que efectivamente sale
+ * a MySQL, así que el ahorro no se ve como queries de menos: se ve como si los
+ * modos 2 y 3 fueran 20 veces más rápidos.
+ *
+ * O sea: calendar no es más rápido, corrió segundo.
+ *
+ * Las ~16 queries del piso son las consultas SQL directas que MetricsService hace
+ * por modo pase lo que pase: rows_between x2, count_registered_between x2,
+ * first_time_enrollments_count x2, first_enrollment_map_until,
+ * cross_course_users_count, las dos de retención y dau_mau. Las ~153 restantes
+ * del primer modo son lecturas cacheables que los modos 2 y 3 ya no pagan.
+ *
+ * Consecuencia práctica: para medir costo, UNA carga por modo con &mode=.
+ * La tabla comparativa de KPIs sigue siendo válida en multi-modo: el object cache
+ * afecta el COSTO, no los VALORES.
  */
 final class Diagnostics {
 
@@ -140,6 +175,26 @@ final class Diagnostics {
 		self::kv( '   determine_locale()', function_exists( 'determine_locale' ) ? determine_locale() : '(n/d)' );
 		self::kv( '4. object cache externo', function_exists( 'wp_using_ext_object_cache' ) && wp_using_ext_object_cache() ? 'SI' : 'NO (transients en wp_options)' );
 		self::kv( '   round-trip de transient', self::probe_transient() );
+
+		/*
+		 * Huérfanos de la clave-por-segundo: hasta B1, current_end llevaba
+		 * segundos, así que cada carga de la página de país escribía una fila
+		 * nueva en wp_options y el caché no acertaba nunca. Sin object cache
+		 * externo, están todos acá. COUNT con LIKE sobre option_name, que el
+		 * índice único de la columna cubre.
+		 */
+		$tr_value = (int) $wpdb->get_var(
+			"SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name LIKE '_transient_%e3a_country%'"
+		);
+		$tr_timeout = (int) $wpdb->get_var(
+			"SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name LIKE '_transient_timeout_%e3a_country%'"
+		);
+		self::kv( '   filas _transient_%e3a_country%', self::num( $tr_value ) );
+		self::kv( '   filas _transient_timeout_%e3a_country%', self::num( $tr_timeout ) );
+		if ( $tr_value > 50 ) {
+			echo "   (acumulacion de la clave-por-segundo anterior a B1. WordPress las purga\n";
+			echo "    solo cuando alguien las pide y ya vencieron, asi que pueden quedarse.)\n";
+		}
 		self::kv( '5. MySQL version', (string) $wpdb->get_var( 'SELECT VERSION()' ) );
 		self::kv( '   @@sql_mode', (string) $wpdb->get_var( 'SELECT @@sql_mode' ) );
 		echo "   (sql_mode se agrega por decision propia: si incluye ONLY_FULL_GROUP_BY,\n";
@@ -308,17 +363,73 @@ final class Diagnostics {
 
 		$period = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : '30';
 
-		$modes = array(
+		$all_modes = array(
 			DatePeriod::MODE_LEGACY,
 			DatePeriod::MODE_CALENDAR,
 			DatePeriod::MODE_CALENDAR_UTC,
 		);
 
-		// --- Cabecera: las fechas de los 3 modos ANTES de calcular nada. -----
+		// &mode=<uno de los tres>: calcula UN SOLO modo. Es la unica medicion de
+		// costo confiable, porque el request arranca con el object cache frio.
+		$single = isset( $_GET['mode'] ) ? sanitize_text_field( wp_unslash( $_GET['mode'] ) ) : '';
+
+		if ( '' !== $single && ! in_array( $single, $all_modes, true ) ) {
+			self::h( 'ERROR: PARAMETRO mode NO RECONOCIDO' );
+			printf( "  Recibido : %s\n", esc_html( $single ) );
+			printf( "  Validos  : %s\n", implode( ', ', $all_modes ) );
+			echo "\n  No se aplica ningun fallback: corregi el parametro y volve a cargar.\n";
+			return;
+		}
+
+		$modes = ( '' !== $single ) ? array( $single ) : $all_modes;
+
+		/*
+		 * TEMPORAL — verificacion de la hipotesis del object cache (ver docblock
+		 * de la clase). &order=reverse invierte el orden de los tres modos. Si el
+		 * patron de costo sigue al ORDEN y no al MODO, la hipotesis queda
+		 * confirmada. BORRAR este bloque una vez verificado.
+		 */
+		$order = isset( $_GET['order'] ) ? sanitize_text_field( wp_unslash( $_GET['order'] ) ) : '';
+		if ( 'reverse' === $order && count( $modes ) > 1 ) {
+			$modes = array_reverse( $modes );
+		}
+
+		// --- Advertencia de medicion, primero de todo. -----------------------
+		self::h( 'COMO LEER LOS TIEMPOS Y LOS CONTEOS DE QUERIES' );
+
+		if ( count( $modes ) > 1 ) {
+			echo "  ATENCION: se estan corriendo " . count( $modes ) . " modos en UN MISMO request.\n";
+			echo "  Los tiempos y conteos de queries del segundo y del tercer modo NO son\n";
+			echo "  comparables con los del primero, y NO reflejan su costo real.\n\n";
+			echo "  Motivo: el object cache no persistente de WordPress (wp_cache_*, que\n";
+			echo "  respaldan get_post_meta / get_userdata / get_the_title) vive en memoria\n";
+			echo "  durante todo el request. El PRIMER modo que corre paga todas las lecturas\n";
+			echo "  de Tutor LMS; los siguientes las encuentran calientes. \$wpdb->num_queries\n";
+			echo "  solo cuenta SQL real, asi que el ahorro no aparece como queries de menos:\n";
+			echo "  aparece como si los modos 2 y 3 fueran muchisimo mas rapidos. No lo son.\n\n";
+			echo "  Para medir costo hay que usar &mode= en cargas SEPARADAS:\n";
+			echo "    &e3a_diag=compare&period=" . esc_html( $period ) . "&mode=legacy\n";
+			echo "    &e3a_diag=compare&period=" . esc_html( $period ) . "&mode=calendar\n";
+			echo "    &e3a_diag=compare&period=" . esc_html( $period ) . "&mode=calendar_utc\n\n";
+			echo "  La tabla comparativa de KPIs de mas abajo SI es valida: el object cache\n";
+			echo "  afecta el COSTO, no los VALORES.\n";
+		} else {
+			echo "  Modo unico (&mode=" . esc_html( $modes[0] ) . "): el request arranca con el\n";
+			echo "  object cache frio, asi que el tiempo y el conteo de queries de aca abajo\n";
+			echo "  SI son la medicion real del costo de este modo.\n\n";
+			echo "  No hay tabla comparativa: para comparar KPIs entre modos, carga sin &mode=.\n";
+		}
+
+		if ( 'reverse' === $order ) {
+			echo "\n  [TEMPORAL] &order=reverse activo: los modos corren en orden invertido.\n";
+		}
+
+		// --- Cabecera: las fechas de cada modo ANTES de calcular nada. -------
 		// Si el gateway corta la request por timeout, esto solo ya es util.
 		self::h( 'PERIODO PEDIDO' );
 		self::kv( 'period', $period );
 		self::kv( 'modo persistido', DatePeriod::resolve_mode() );
+		self::kv( 'modos a calcular', implode( ' -> ', $modes ) );
 		self::kv( 'tope de rango custom', (string) apply_filters( 'e3a_max_custom_range_days', DatePeriod::DEFAULT_MAX_CUSTOM_DAYS ) );
 
 		$resolved = array();
@@ -391,7 +502,19 @@ final class Diagnostics {
 			self::flush_now();
 		}
 
-		// --- Tabla comparativa. ---------------------------------------------
+		// --- Tabla comparativa. Solo tiene sentido con mas de un modo. -------
+		if ( count( $modes ) < 2 ) {
+			self::h( 'RESUMEN DE COSTO (medicion confiable, cache frio)' );
+			printf(
+				"  %-14s %6.2f s   %8s queries\n",
+				$modes[0],
+				$timings[ $modes[0] ]['seconds'],
+				self::num( $timings[ $modes[0] ]['queries'] )
+			);
+			echo "\n  Sin tabla comparativa: hay un solo modo. Carga sin &mode= para comparar KPIs.\n";
+			return;
+		}
+
 		self::h( 'COMPARATIVA KPI POR KPI' );
 
 		$all_keys = array();
@@ -437,18 +560,25 @@ final class Diagnostics {
 		}
 
 		echo "\n";
-		self::h( 'RESUMEN DE COSTO' );
+		self::h( 'RESUMEN DE COSTO — NO COMPARABLE ENTRE SI' );
+
+		$first = true;
 		foreach ( $modes as $mode ) {
 			printf(
-				"  %-14s %6.2f s   %8s queries\n",
+				"  %-14s %6.2f s   %8s queries   %s\n",
 				$mode,
 				$timings[ $mode ]['seconds'],
-				self::num( $timings[ $mode ]['queries'] )
+				self::num( $timings[ $mode ]['queries'] ),
+				$first ? '<- unico con cache frio' : '<- cache ya caliente, NO usar'
 			);
+			$first = false;
 		}
 
-		echo "\n  Nota: el modo compare saltea los transients (filtro e3a_bypass_cache),\n";
-		echo "  asi que estos tiempos son de calculo en frio, sin cache.\n";
+		echo "\n  Solo la primera fila mide costo real. Las otras heredan el object cache\n";
+		echo "  que lleno la primera y por eso salen artificialmente baratas.\n";
+		echo "  Para el costo de cada modo: tres cargas separadas con &mode=.\n";
+		echo "\n  (El filtro e3a_bypass_cache saltea los transients del reporte de pais,\n";
+		echo "  que es otra cosa: eso no afecta al object cache en memoria.)\n";
 	}
 
 	/**
