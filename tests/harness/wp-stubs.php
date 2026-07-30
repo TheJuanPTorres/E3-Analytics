@@ -104,14 +104,38 @@ function wp_timezone() {
 }
 
 /**
- * Solo las dos opciones que hacen falta.
+ * Opciones sobreescribibles desde el harness (e3a_date_mode, date_format...).
+ *
+ * @var array<string,mixed>
+ */
+$GLOBALS['e3a_test_options'] = array();
+
+/**
+ * Fija una opción para el resto del proceso.
+ *
+ * @param string $name
+ * @param mixed  $value
+ */
+function e3a_test_set_option( $name, $value ) {
+	$GLOBALS['e3a_test_options'][ (string) $name ] = $value;
+}
+
+/**
+ * Solo las opciones que hacen falta.
  * gmt_offset se deriva de la TZ del sitio en el instante congelado, que es lo
  * que hace WP cuando timezone_string está seteada.
  */
 function get_option( $name, $default = false ) {
+	$name = (string) $name;
+
+	if ( array_key_exists( $name, $GLOBALS['e3a_test_options'] ) ) {
+		return $GLOBALS['e3a_test_options'][ $name ];
+	}
+
 	switch ( $name ) {
 		case 'date_format':
-			return 'j F, Y';
+			// Producción puede tener otro formato; el modo INFO lo reporta.
+			return 'j M Y';
 
 		case 'gmt_offset':
 			$offset = wp_timezone()->getOffset( new DateTime( '@' . e3a_test_now_ts() ) );
@@ -120,6 +144,31 @@ function get_option( $name, $default = false ) {
 		default:
 			return $default;
 	}
+}
+
+/**
+ * Escribe en el mismo array en memoria que lee get_option().
+ */
+function update_option( $name, $value, $autoload = null ) {
+	e3a_test_set_option( $name, $value );
+
+	return true;
+}
+
+/**
+ * Hooks: no-op. DatePeriod solo usa apply_filters(), que devuelve el valor
+ * intacto; el modo se fuerza por opción con e3a_test_set_option().
+ */
+function add_filter( $hook_name, $callback, $priority = 10, $accepted_args = 1 ) {
+	return true;
+}
+
+function remove_filter( $hook_name, $callback, $priority = 10 ) {
+	return true;
+}
+
+function has_filter( $hook_name, $callback = false ) {
+	return false;
 }
 
 /**

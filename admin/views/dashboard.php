@@ -11,7 +11,10 @@ $current_end   = (string) ( $data['current_end'] ?? '' );
 $prev_start    = (string) ( $data['prev_start'] ?? '' );
 $prev_end      = (string) ( $data['prev_end'] ?? '' );
 
-$period_key    = (string) ( $data['period_key'] ?? (string) $period );
+// Sin fallback al entero: con un rango custom, period_int es la duración real
+// (46, por ejemplo) y emitir period=46 en una URL cae al default en silencio.
+// Si period_key falta, es un defecto de DatePeriod, no algo que parchear acá.
+$period_key    = (string) ( $data['period_key'] ?? '' );
 $is_all        = (bool) ( $data['is_all'] ?? false );
 $has_compare   = ( $prev_start !== '' && $prev_end !== '' );
 

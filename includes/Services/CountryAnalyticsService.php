@@ -17,39 +17,61 @@ final class CountryAnalyticsService {
         $start      = (string) ( $dates['current_start'] ?? '' );
         $end        = (string) ( $dates['current_end'] ?? '' );
         $is_all     = (bool) ( $dates['is_all'] ?? false );
+        $mode       = (string) ( $dates['mode'] ?? DatePeriod::MODE_LEGACY );
 
-        $cache_key = 'e3a_country_' . md5( $period_key . '|' . $start . '|' . $end );
+        // user_registered está en UTC. En legacy y calendar estas claves son copia
+        // literal de las locales, así que no hay condicional de modo acá.
+        $start_utc = (string) ( $dates['current_start_utc'] ?? $start );
+        $end_utc   = (string) ( $dates['current_end_utc'] ?? $end );
+
+        /*
+         * El modo entra en la clave: legacy y calendar producen métricas distintas
+         * para el mismo period_key, y sin el modo un cambio de configuración
+         * devolvería el payload del modo anterior.
+         */
+        $cache_key = 'e3a_country_' . md5( $mode . '|' . $period_key . '|' . $start . '|' . $end );
 
         // Identidad del período con el que se calculan las métricas de este payload.
-        // Se guarda dentro del transient para poder validarlo al leerlo.
         $computed_for = [
+            'mode'          => $mode,
             'period_key'    => $period_key,
             'current_start' => $start,
             'current_end'   => $end,
         ];
 
-        $cached = get_transient( $cache_key );
-        if ( is_array( $cached )
-             && isset( $cached['_computed_for'] )
-             && $cached['_computed_for'] === $computed_for ) {
-            // Las fechas cacheadas coinciden con las del request: los números son válidos.
-            return $cached;
+        // El modo compare de la herramienta de diagnóstico saltea el caché para
+        // medir cálculo en frío y para no contaminar un modo con otro.
+        $bypass_cache = (bool) apply_filters( 'e3a_bypass_cache', false );
+
+        if ( ! $bypass_cache ) {
+            $cached = get_transient( $cache_key );
+            if ( is_array( $cached )
+                 && isset( $cached['_computed_for'] )
+                 && $cached['_computed_for'] === $computed_for ) {
+                /*
+                 * El payload cacheado NO contiene 'dates': se le adjunta el fresco
+                 * al retornar. Motivo: 'notice' no se deriva de la clave de caché.
+                 * Un rango recortado y el rango ya recortado comparten clave, así
+                 * que cachear 'dates' mostraría un aviso de recorte en un request
+                 * que no recortó nada. Se elimina la clase de problema en lugar de
+                 * vigilarla.
+                 */
+                $cached['dates'] = $dates;
+                return $cached;
+            }
         }
-        // Sin coincidencia (o payload viejo sin '_computed_for') → cache miss: recalcular.
-        // No se sobrescriben las fechas de un payload cacheado: eso mostraría
-        // una cabecera con un rango y métricas de otro.
 
         global $wpdb;
         $post_type = apply_filters( 'e3a_enrollment_post_type', 'tutor_enrolled' );
 
-        // 1) Usuarios registrados en el período
+        // 1) Usuarios registrados en el período (user_registered está en UTC)
         $registered_user_ids = [];
-        if ( $start && $end ) {
+        if ( $start_utc && $end_utc ) {
             $rows = $wpdb->get_results(
                 $wpdb->prepare(
                     "SELECT ID FROM {$wpdb->users} WHERE user_registered BETWEEN %s AND %s",
-                    $start,
-                    $end
+                    $start_utc,
+                    $end_utc
                 ),
                 ARRAY_A
             );
@@ -210,9 +232,9 @@ final class CountryAnalyticsService {
             'completed'  => array_map( function( $r ) { return (int) $r['completed_enrollments']; }, $top ),
         ];
 
+        // Sin 'dates': lo que se cachea son SOLO las métricas.
         $out = [
             '_computed_for' => $computed_for,
-            'dates'   => $dates,
             'totals'  => [
                 'users_total'     => $total_users,
                 'users_known'     => $known_users,
@@ -222,7 +244,21 @@ final class CountryAnalyticsService {
             'chart'     => $chart,
         ];
 
-        set_transient( $cache_key, $out, 15 * MINUTE_IN_SECONDS );
+        /*
+         * TTL de 60 s. Hasta ahora el caché nunca acertaba porque current_end
+         * llevaba segundos y la clave cambiaba a cada request. En modo calendario
+         * la clave se estabiliza y el caché empieza a funcionar de verdad, y con
+         * él aparece el problema de que guardar la configuración de quizzes de
+         * retroalimentación no invalida nada. Con 60 s la exposición queda acotada
+         * a un minuto. El salt de versión de opciones es otra tanda.
+         */
+        if ( ! $bypass_cache ) {
+            set_transient( $cache_key, $out, 60 );
+        }
+
+        // 'dates' se adjunta fresco, nunca se cachea.
+        $out['dates'] = $dates;
+
         return $out;
     }
 

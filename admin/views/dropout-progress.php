@@ -4,7 +4,10 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 $dates   = $report['dates'] ?? [];
 $period  = (int) ( $dates['period_int'] ?? 30 );
 
-$period_key = (string) ( $dates['period_key'] ?? (string) $period );
+// Sin fallback al entero: con un rango custom, period_int es la duración real
+// (46, por ejemplo) y emitir period=46 en una URL cae al default en silencio.
+// Si period_key falta, es un defecto de DatePeriod, no algo que parchear acá.
+$period_key = (string) ( $dates['period_key'] ?? '' );
 $is_all     = (bool) ( $dates['is_all'] ?? false );
 
 $fmt_date = function( $mysql ) {

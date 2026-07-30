@@ -30,7 +30,6 @@ final class DropoutProgressService {
         $enrollRepo = new EnrollmentsRepository();
         $tutor      = new TutorLms();
 
-        $period        = (int) ($dates['period_int'] ?? 30);
         $current_start = (string) ($dates['current_start'] ?? '');
         $current_end   = (string) ($dates['current_end'] ?? '');
 

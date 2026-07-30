@@ -38,6 +38,11 @@ final class ExportService {
         $start = (string) ( $dates['current_start'] ?? '' );
         $end   = (string) ( $dates['current_end'] ?? '' );
 
+        // user_registered está en UTC. Copia literal de las locales salvo en
+        // modo 'calendar_utc'.
+        $start_utc = (string) ( $dates['current_start_utc'] ?? $start );
+        $end_utc   = (string) ( $dates['current_end_utc'] ?? $end );
+
         $is_all = (bool) ( $dates['is_all'] ?? false );
 
         $sheets = [];
@@ -55,7 +60,7 @@ final class ExportService {
 
         switch ( $key ) {
             case 'new_users':
-                $rows = $this->get_users_registered_between( $start, $end );
+                $rows = $this->get_users_registered_between( $start_utc, $end_utc );
                 $sheets[] = [ 'name' => 'Usuarios', 'rows' => $rows ];
                 $this->maybe_add_user_meta_sheet( $sheets, $rows );
                 return [ 'filename' => 'e3-dashboard-nuevos-registros', 'sheets' => $sheets ];

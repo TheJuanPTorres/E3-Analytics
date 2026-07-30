@@ -24,12 +24,24 @@ final class MetricsService {
         $prev_start    = $dates['prev_start'] ?? '';
         $prev_end      = $dates['prev_end'] ?? '';
 
-        $period_key    = (string) ( $dates['period_key'] ?? (string) $period );
+        /*
+         * Límites en UTC. wp_users.user_registered lo escribe WP core en UTC,
+         * mientras wp_posts.post_date está en hora local del sitio. Estas claves
+         * son copia literal de las locales salvo en modo 'calendar_utc', así que
+         * acá no hace falta ningún condicional de modo.
+         */
+        $current_start_utc = $dates['current_start_utc'] ?? $current_start;
+        $current_end_utc   = $dates['current_end_utc'] ?? $current_end;
+        $prev_start_utc    = $dates['prev_start_utc'] ?? $prev_start;
+        $prev_end_utc      = $dates['prev_end_utc'] ?? $prev_end;
+
+        $period_key    = (string) ( $dates['period_key'] ?? '' );
         $is_all        = (bool) ( $dates['is_all'] ?? false );
         $has_compare   = ( $prev_start !== '' && $prev_end !== '' );
 
-        $current_new_users  = $usersRepo->count_registered_between($current_start, $current_end);
-        $previous_new_users = $has_compare ? $usersRepo->count_registered_between($prev_start, $prev_end) : null;
+        // user_registered: UTC.
+        $current_new_users  = $usersRepo->count_registered_between($current_start_utc, $current_end_utc);
+        $previous_new_users = $has_compare ? $usersRepo->count_registered_between($prev_start_utc, $prev_end_utc) : null;
         $growth_new_users   = $has_compare ? Math::growth_percent($current_new_users, $previous_new_users) : null;
 
         $current_rows         = $enrollRepo->rows_between($current_start, $current_end);
@@ -182,7 +194,8 @@ final class MetricsService {
             $chart_return[] = (int) $row->current_returning_enroll;
         }
 
-        $retention = $this->get_retention_snapshot($current_start, $current_end, $is_all);
+        // La cohorte de retención se filtra por user_registered: límites en UTC.
+        $retention = $this->get_retention_snapshot($current_start_utc, $current_end_utc, $is_all);
         $dau_mau   = $this->get_dau_mau_snapshot();
 
         return [
@@ -228,6 +241,17 @@ final class MetricsService {
         ];
     }
 
+    /**
+     * IMPORTANTE — acá conviven dos zonas horarias:
+     *
+     *  - $cohort_start / $cohort_end llegan en UTC y se usan SOLO para filtrar
+     *    wp_users.user_registered (líneas de la cohorte y base de retención).
+     *  - Los límites de actividad ($min_start_str / $now_str) se calculan acá
+     *    dentro, en hora local, porque comparan contra wp_posts.post_date.
+     *
+     * Las dos queries de más abajo filtran las dos columnas a la vez: no
+     * unificar estos dos juegos de límites.
+     */
     private function get_retention_snapshot( $cohort_start, $cohort_end, $is_all = false ) {
         global $wpdb;
 

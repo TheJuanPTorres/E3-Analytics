@@ -11,6 +11,61 @@ final class Settings {
     const OPTION_KEY = 'e3a_feedback_quiz_ids';
 
     /**
+     * Modo de resolución de fechas. TEMPORAL (etapa B1): este control y su
+     * opción se eliminan al cerrar B2, cuando el modo calendario pase a ser el
+     * único comportamiento.
+     */
+    const OPTION_DATE_MODE = 'e3a_date_mode';
+
+    /**
+     * Activador de la página de diagnóstico. TEMPORAL (etapa B1): se elimina
+     * junto con includes/Admin/Diagnostics.php al cerrar B2.
+     */
+    const OPTION_DIAG = 'e3a_diag_enabled';
+
+    /**
+     * Modo de fechas persistido. Cadena vacía = sin configurar, y entonces
+     * DatePeriod cae a 'legacy'.
+     *
+     * @return string
+     */
+    public static function get_date_mode() {
+        $val = (string) get_option( self::OPTION_DATE_MODE, '' );
+
+        return in_array( $val, \E3_Analytics\Support\DatePeriod::modes(), true ) ? $val : '';
+    }
+
+    /**
+     * @param string $mode
+     * @return bool True si el valor era válido y se guardó.
+     */
+    public static function save_date_mode( $mode ) {
+        $mode = (string) $mode;
+
+        if ( ! in_array( $mode, \E3_Analytics\Support\DatePeriod::modes(), true ) ) {
+            return false;
+        }
+
+        update_option( self::OPTION_DATE_MODE, $mode, false );
+
+        return true;
+    }
+
+    /**
+     * @return bool
+     */
+    public static function is_diag_enabled() {
+        return (bool) get_option( self::OPTION_DIAG, false );
+    }
+
+    /**
+     * @param bool $enabled
+     */
+    public static function save_diag_enabled( $enabled ) {
+        update_option( self::OPTION_DIAG, $enabled ? 1 : 0, false );
+    }
+
+    /**
      * Devuelve el array de IDs de quizzes marcados como retroalimentación.
      * @return int[]
      */

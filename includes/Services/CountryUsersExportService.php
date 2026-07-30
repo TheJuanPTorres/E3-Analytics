@@ -30,10 +30,15 @@ final class CountryUsersExportService {
         $start      = (string) ( $dates['current_start'] ?? '' );
         $end        = (string) ( $dates['current_end'] ?? '' );
 
+        // user_registered está en UTC; post_date en hora local. Los dos juegos
+        // viajan juntos porque get_user_universe_ids() consulta las dos columnas.
+        $start_utc = (string) ( $dates['current_start_utc'] ?? $start );
+        $end_utc   = (string) ( $dates['current_end_utc'] ?? $end );
+
         $post_type = apply_filters( 'e3a_enrollment_post_type', 'tutor_enrolled' );
 
         // ── 1. Universo de usuarios ───────────────────────────────────────
-        $user_ids = $this->get_user_universe_ids( $start, $end, $post_type );
+        $user_ids = $this->get_user_universe_ids( $start, $end, $post_type, $start_utc, $end_utc );
         $total    = count( $user_ids );
 
         $limit     = (int) $limit;
@@ -353,23 +358,46 @@ final class CountryUsersExportService {
         return [ 'min' => '', 'max' => '', 'mid' => '' ];
     }
 
-    private function get_user_universe_ids( $start, $end, $post_type ) {
+    /**
+     * Universo de usuarios del período.
+     *
+     * OJO: esta función consulta las DOS columnas de fecha, cada una en su zona.
+     *  - wp_users.user_registered  -> UTC   ($start_utc / $end_utc)
+     *  - wp_posts.post_date        -> local ($start / $end)
+     * No unificar los parámetros.
+     *
+     * @param string      $start     Límite inicial local (post_date).
+     * @param string      $end       Límite final local (post_date).
+     * @param string      $post_type Post type de inscripción.
+     * @param string|null $start_utc Límite inicial UTC (user_registered).
+     * @param string|null $end_utc   Límite final UTC (user_registered).
+     * @return int[]
+     */
+    private function get_user_universe_ids( $start, $end, $post_type, $start_utc = null, $end_utc = null ) {
         global $wpdb;
+
+        // Si no se pasan, se cae a los locales: es el comportamiento de legacy.
+        if ( null === $start_utc ) $start_utc = $start;
+        if ( null === $end_utc )   $end_utc   = $end;
 
         $ids = [];
 
-        if ( $start && $end ) {
+        // Registrados: user_registered, en UTC.
+        if ( $start_utc && $end_utc ) {
             $registered = $wpdb->get_results(
                 $wpdb->prepare(
                     "SELECT ID FROM {$wpdb->users} WHERE user_registered BETWEEN %s AND %s",
-                    $start, $end
+                    $start_utc, $end_utc
                 ),
                 ARRAY_A
             );
             foreach ( (array) $registered as $r ) {
                 $ids[] = (int) ( $r['ID'] ?? 0 );
             }
+        }
 
+        // Inscriptos: post_date, en hora local.
+        if ( $start && $end ) {
             $enrolled = $wpdb->get_results(
                 $wpdb->prepare(
                     "SELECT DISTINCT post_author AS user_id

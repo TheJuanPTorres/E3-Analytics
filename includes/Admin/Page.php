@@ -113,6 +113,13 @@ final class Page {
             wp_die( __( 'No tienes permisos suficientes para ver esta página.', 'e3-analytics' ) );
         }
 
+        // TEMPORAL etapa B1: herramienta de diagnóstico. Borrar al cerrar B2.
+        // Si la guarda no se cumple, maybe_render() devuelve false y sigue el
+        // dashboard normal: el parámetro se ignora por completo.
+        if ( Diagnostics::maybe_render() ) {
+            return;
+        }
+
         $period = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : null;
 
         $service = new MetricsService();
@@ -337,6 +344,12 @@ final class Page {
         $quizzes_by_course = Settings::get_quizzes_by_course();
         $feedback_ids      = Settings::get_feedback_quiz_ids();
 
+        // TEMPORAL etapa B1: bloque "Avanzado". Borrar las 4 líneas al cerrar B2.
+        $date_mode      = Settings::get_date_mode();
+        $date_mode_eff  = \E3_Analytics\Support\DatePeriod::resolve_mode();
+        $date_modes     = \E3_Analytics\Support\DatePeriod::mode_labels();
+        $diag_enabled   = Settings::is_diag_enabled();
+
         require E3A_PATH . 'admin/views/settings.php';
     }
 
@@ -350,8 +363,30 @@ final class Page {
             wp_die( __( 'Nonce inválido. Recarga la página e intenta de nuevo.', 'e3-analytics' ) );
         }
 
-        $raw = isset( $_POST['feedback_quiz_ids'] ) ? (array) $_POST['feedback_quiz_ids'] : [];
-        Settings::save_feedback_quiz_ids( $raw );
+        /*
+         * La página tiene dos formularios distintos contra este mismo handler.
+         * Sin distinguir la sección, guardar el bloque "Avanzado" borraría la
+         * lista de quizzes de retroalimentación (llegaría sin feedback_quiz_ids
+         * y se guardaría un array vacío). Por defecto 'quizzes', que es el
+         * comportamiento histórico si el campo no viene.
+         */
+        $section = isset( $_POST['e3a_section'] )
+            ? sanitize_text_field( wp_unslash( $_POST['e3a_section'] ) )
+            : 'quizzes';
+
+        if ( 'quizzes' === $section ) {
+            $raw = isset( $_POST['feedback_quiz_ids'] ) ? (array) $_POST['feedback_quiz_ids'] : [];
+            Settings::save_feedback_quiz_ids( $raw );
+        }
+
+        // TEMPORAL etapa B1: borrar este bloque al cerrar B2.
+        if ( 'advanced' === $section ) {
+            $mode = isset( $_POST['e3a_date_mode'] ) ? sanitize_text_field( wp_unslash( $_POST['e3a_date_mode'] ) ) : '';
+            if ( '' !== $mode ) {
+                Settings::save_date_mode( $mode );
+            }
+            Settings::save_diag_enabled( ! empty( $_POST['e3a_diag_enabled'] ) );
+        }
 
         wp_redirect( add_query_arg(
             [ 'page' => $this->slug_settings, 'e3a_saved' => '1' ],

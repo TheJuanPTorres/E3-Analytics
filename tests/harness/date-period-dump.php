@@ -2,21 +2,27 @@
 /**
  * Dump del contrato de E3_Analytics\Support\DatePeriod::resolve().
  *
- * Imprime las 7 claves que devuelve resolve() para cada valor de period,
- * bajo un reloj congelado y en dos timezones. Sin WordPress, sin base de datos.
+ * Sin WordPress, sin base de datos, con reloj congelado. La salida tiene que
+ * ser byte-idéntica entre corridas para poder diffear antes/después.
  *
  * Uso:
- *   php tests/harness/date-period-dump.php                  # presets + custom, ambas TZ
- *   php tests/harness/date-period-dump.php --only=presets   # solo 7/30/90/365/all
- *   php tests/harness/date-period-dump.php --only=custom    # solo los casos raros
- *   php tests/harness/date-period-dump.php --tz=UTC
- *   php tests/harness/date-period-dump.php --now='2026-07-29 17:45:00'
+ *   php tests/harness/date-period-dump.php --only=presets
+ *   php tests/harness/date-period-dump.php --only=all --mode=all
+ *   php tests/harness/date-period-dump.php --mode=calendar_utc --now='2026-07-30 04:28:00'
  *   php tests/harness/date-period-dump.php --min='2019-03-14 08:22:31'
- *   php tests/harness/date-period-dump.php --min=''          # tabla sin inscripciones
+ *   php tests/harness/date-period-dump.php --min=''        # tabla sin inscripciones
+ *   php tests/harness/date-period-dump.php --tz=UTC
  *
- * El reloj está congelado a propósito: la salida tiene que ser byte-idéntica
- * entre corridas para poder diffear el antes/después del cambio a días
- * calendario.
+ * La invocación de referencia (la que se compara contra
+ * tests/harness/baseline-presets.txt) es:
+ *   php tests/harness/date-period-dump.php --only=presets
+ * o sea --mode=legacy, que es el default. Esa tabla imprime SOLO las 7 claves
+ * originales, así que corre igual contra el DatePeriod viejo y el nuevo: es lo
+ * que permite demostrar que legacy no se movió.
+ *
+ * La zona del sitio es America/Bogota, confirmada en Ajustes -> Generales, con
+ * timezone_string poblado y sin horario de verano. No se recorren otras zonas
+ * por defecto ni se ejercita DST: no aplica a este sitio.
  */
 
 // ---------------------------------------------------------------------------
@@ -25,12 +31,27 @@
 
 $opts = array(
 	'only' => 'all',
+	'mode' => 'legacy',
 	'tz'   => null,
 	'now'  => null,
 	'min'  => null,
 );
 
+/*
+ * --frozen imprime SOLO la cabecera y la tabla de las 7 claves originales.
+ * Es la invocación de referencia: al no tocar ninguna clave nueva, produce
+ * salida byte-idéntica contra el DatePeriod viejo y el nuevo, y por eso su md5
+ * sirve como guarda de regresión del modo legacy. El resto de las secciones
+ * (claves nuevas, labels, invariantes, prueba de pertenencia) no existen en el
+ * código viejo, así que quedan fuera de la comparación a propósito.
+ */
+$frozen = false;
+
 foreach ( array_slice( $argv, 1 ) as $arg ) {
+	if ( '--frozen' === $arg ) {
+		$frozen = true;
+		continue;
+	}
 	if ( ! preg_match( '/^--([a-z]+)=(.*)$/s', $arg, $m ) ) {
 		fwrite( STDERR, "Argumento no reconocido: {$arg}\n" );
 		exit( 2 );
@@ -42,8 +63,12 @@ foreach ( array_slice( $argv, 1 ) as $arg ) {
 	$opts[ $m[1] ] = $m[2];
 }
 
-if ( ! in_array( $opts['only'], array( 'all', 'presets', 'custom' ), true ) ) {
-	fwrite( STDERR, "--only debe ser: all | presets | custom\n" );
+if ( ! in_array( $opts['only'], array( 'all', 'presets', 'custom', 'calendar' ), true ) ) {
+	fwrite( STDERR, "--only debe ser: all | presets | custom | calendar\n" );
+	exit( 2 );
+}
+if ( ! in_array( $opts['mode'], array( 'all', 'legacy', 'calendar', 'calendar_utc' ), true ) ) {
+	fwrite( STDERR, "--mode debe ser: all | legacy | calendar | calendar_utc\n" );
 	exit( 2 );
 }
 
@@ -55,27 +80,37 @@ if ( null !== $opts['min'] ) {
 	define( 'E3A_TEST_MIN_POST', $opts['min'] );
 }
 
-// La TZ se recorre en el bucle principal, así que no se fija por constante:
-// se controla con una variable global que lee el stub de wp_timezone().
-$timezones = ( null !== $opts['tz'] )
-	? array( $opts['tz'] )
-	: array( 'America/Bogota', 'UTC' );
+require_once __DIR__ . '/wp-stubs.php';
+require_once dirname( __DIR__, 2 ) . '/includes/Support/DatePeriod.php';
+
+use E3_Analytics\Support\DatePeriod;
+
+$GLOBALS['e3a_test_tz_override'] = ( null !== $opts['tz'] && '' !== $opts['tz'] )
+	? $opts['tz']
+	: 'America/Bogota';
+
+$modes = ( 'all' === $opts['mode'] )
+	? array( 'legacy', 'calendar', 'calendar_utc' )
+	: array( $opts['mode'] );
 
 // ---------------------------------------------------------------------------
 // Casos
 // ---------------------------------------------------------------------------
 
-/**
- * Cada caso: [ etiqueta legible, valor crudo que recibe resolve() ].
- * El valor se pasa como $period_override Y como $_GET['period'], que es lo que
- * hace la aplicacion real (Page.php lee $_GET y lo pasa como argumento).
- */
 $presets = array(
 	array( '7', '7' ),
 	array( '30', '30' ),
 	array( '90', '90' ),
 	array( '365', '365' ),
 	array( 'all', 'all' ),
+);
+
+$calendar_presets = array(
+	array( 'this_month', 'this_month' ),
+	array( 'last_month', 'last_month' ),
+	array( 'this_quarter', 'this_quarter' ),
+	array( 'this_year', 'this_year' ),
+	array( 'last_year', 'last_year' ),
 );
 
 $customs = array(
@@ -96,31 +131,23 @@ switch ( $opts['only'] ) {
 	case 'presets':
 		$cases = $presets;
 		break;
+	case 'calendar':
+		$cases = $calendar_presets;
+		break;
 	case 'custom':
 		$cases = $customs;
 		break;
 	default:
-		$cases = array_merge( $presets, $customs );
+		$cases = array_merge( $presets, $calendar_presets, $customs );
 		break;
 }
-
-// ---------------------------------------------------------------------------
-// Carga
-// ---------------------------------------------------------------------------
-
-$plugin_root = dirname( __DIR__, 2 );
-
-require_once __DIR__ . '/wp-stubs.php';
-require_once $plugin_root . '/includes/Support/DatePeriod.php';
-
-use E3_Analytics\Support\DatePeriod;
 
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
-/** Columnas: [ titulo, ancho ] */
-$columns = array(
+/** Tabla A: las 7 claves originales. Formato congelado — es la referencia. */
+$cols_core = array(
 	array( 'input',         38 ),
 	array( 'period_key',    10 ),
 	array( 'is_all',         6 ),
@@ -131,6 +158,18 @@ $columns = array(
 	array( 'prev_end',      19 ),
 	array( 'span',           9 ),
 	array( 'db',             3 ),
+);
+
+/** Tabla B: claves nuevas. Solo se imprime en los modos calendario. */
+$cols_new = array(
+	array( 'input',             38 ),
+	array( 'days',               6 ),
+	array( 'is_custom',          9 ),
+	array( 'preset_key',        12 ),
+	array( 'current_start_utc', 19 ),
+	array( 'current_end_utc',   19 ),
+	array( 'prev_start_utc',    19 ),
+	array( 'prev_end_utc',      19 ),
 );
 
 function e3a_pad( $value, $width ) {
@@ -157,127 +196,228 @@ function e3a_rule( array $columns ) {
 	return '+-' . implode( '-+-', $out ) . '-+';
 }
 
-/**
- * Dias entre current_start y current_end, con 2 decimales.
- * Es informativo: sirve para ver de un vistazo el largo real de la ventana.
- */
+function e3a_titles( array $columns ) {
+	$t = array();
+	foreach ( $columns as $col ) {
+		$t[] = $col[0];
+	}
+	return $t;
+}
+
 function e3a_span_days( $start, $end ) {
 	if ( '' === (string) $start || '' === (string) $end ) {
 		return '-';
 	}
-	$a = strtotime( $start );
-	$b = strtotime( $end );
+	$a = strtotime( (string) $start );
+	$b = strtotime( (string) $end );
 	if ( false === $a || false === $b ) {
 		return '?';
 	}
 	return number_format( ( $b - $a ) / 86400, 2, '.', '' );
 }
 
+function e3a_bool( $v ) {
+	return $v ? 'true' : 'false';
+}
+
+/**
+ * Resuelve un caso simulando un request real: el mismo valor por $_GET y como
+ * override, que es lo que hace Page.php.
+ */
+function e3a_resolve_case( $value ) {
+	if ( is_string( $value ) || is_int( $value ) || is_float( $value ) ) {
+		$_GET['period'] = (string) $value;
+	} else {
+		unset( $_GET['period'] );
+	}
+
+	$GLOBALS['wpdb']->reset_queries();
+
+	return DatePeriod::resolve( $value );
+}
+
+$tz_name      = (string) $GLOBALS['e3a_test_tz_override'];
+$offset_hours = ( new DateTimeZone( $tz_name ) )->getOffset( new DateTime( '@' . e3a_test_now_ts() ) ) / 3600;
+$local_now    = gmdate( 'Y-m-d H:i:s', e3a_test_now_ts() + (int) ( $offset_hours * 3600 ) );
+
 echo "DatePeriod::resolve() — dump de contrato\n";
 echo str_repeat( '=', 152 ) . "\n";
 echo 'PHP                 : ' . PHP_VERSION . "\n";
 echo 'default_timezone    : ' . date_default_timezone_get() . "  (WordPress fija UTC en su bootstrap)\n";
+echo 'TZ del sitio        : ' . $tz_name . sprintf( '  (offset %+g h, sin horario de verano)', $offset_hours ) . "\n";
 echo 'reloj congelado UTC : ' . E3A_TEST_NOW . "\n";
+echo 'reloj congelado LOCA: ' . $local_now . "\n";
 echo 'MIN(post_date)      : ' . ( '' === E3A_TEST_MIN_POST ? '(null — tabla sin inscripciones)' : E3A_TEST_MIN_POST ) . "\n";
 echo 'casos               : ' . $opts['only'] . ' (' . count( $cases ) . ")\n";
+echo 'modos               : ' . implode( ', ', $modes ) . "\n";
 echo "\n";
 echo "span = dias entre current_start y current_end.  db = consultas a \$wpdb durante resolve().\n";
-echo "Todo valor fuera de {7,30,90,365,all} cae a '30' en DatePeriod.php:23, en silencio.\n";
+echo "La tabla de las 7 claves originales tiene formato congelado: es la referencia\n";
+echo "contra la que se verifica que el modo legacy no se movio.\n";
 echo "\n";
 
-foreach ( $timezones as $tz ) {
+foreach ( $modes as $mode ) {
 
-	$GLOBALS['e3a_test_tz_override'] = $tz;
-
-	$offset_hours = ( new DateTimeZone( $tz ) )->getOffset( new DateTime( '@' . e3a_test_now_ts() ) ) / 3600;
+	e3a_test_set_option( 'e3a_date_mode', $mode );
 
 	echo str_repeat( '=', 152 ) . "\n";
-	printf(
-		"TZ del sitio: %s   (gmt_offset = %+g h)   hora local congelada: %s\n",
-		$tz,
-		$offset_hours,
-		gmdate( 'Y-m-d H:i:s', e3a_test_now_ts() + (int) ( $offset_hours * 3600 ) )
-	);
+	echo 'MODO: ' . $mode . "\n";
 	echo str_repeat( '=', 152 ) . "\n";
 
-	$titles = array();
-	foreach ( $columns as $col ) {
-		$titles[] = $col[0];
-	}
+	// --- Tabla A: las 7 claves originales -----------------------------------
+	echo e3a_rule( $cols_core ) . "\n";
+	echo e3a_row( e3a_titles( $cols_core ), $cols_core ) . "\n";
+	echo e3a_rule( $cols_core ) . "\n";
 
-	echo e3a_rule( $columns ) . "\n";
-	echo e3a_row( $titles, $columns ) . "\n";
-	echo e3a_rule( $columns ) . "\n";
+	$resolved = array();
 
 	foreach ( $cases as $case ) {
 		list( $label, $value ) = $case;
 
-		// Simula un request real: el mismo valor por $_GET y como override.
-		if ( is_string( $value ) || is_int( $value ) || is_float( $value ) ) {
-			$_GET['period'] = (string) $value;
-		} else {
-			unset( $_GET['period'] );
-		}
-
-		$GLOBALS['wpdb']->reset_queries();
-		$dates = DatePeriod::resolve( $value );
-		$db    = count( $GLOBALS['wpdb']->queries );
+		$d                  = e3a_resolve_case( $value );
+		$resolved[ $label ] = $d;
 
 		echo e3a_row(
 			array(
 				$label,
-				$dates['period_key'],
-				$dates['is_all'] ? 'true' : 'false',
-				$dates['period_int'],
-				'' === $dates['current_start'] ? '(vacio)' : $dates['current_start'],
-				'' === $dates['current_end'] ? '(vacio)' : $dates['current_end'],
-				'' === $dates['prev_start'] ? '(vacio)' : $dates['prev_start'],
-				'' === $dates['prev_end'] ? '(vacio)' : $dates['prev_end'],
-				e3a_span_days( $dates['current_start'], $dates['current_end'] ),
-				$db,
+				$d['period_key'] ?? '',
+				e3a_bool( $d['is_all'] ?? false ),
+				$d['period_int'] ?? '',
+				'' === ( $d['current_start'] ?? '' ) ? '(vacio)' : $d['current_start'],
+				'' === ( $d['current_end'] ?? '' ) ? '(vacio)' : $d['current_end'],
+				'' === ( $d['prev_start'] ?? '' ) ? '(vacio)' : $d['prev_start'],
+				'' === ( $d['prev_end'] ?? '' ) ? '(vacio)' : $d['prev_end'],
+				e3a_span_days( $d['current_start'] ?? '', $d['current_end'] ?? '' ),
+				count( $GLOBALS['wpdb']->queries ),
 			),
-			$columns
+			$cols_core
 		) . "\n";
 	}
 
-	echo e3a_rule( $columns ) . "\n\n";
+	echo e3a_rule( $cols_core ) . "\n";
+
+	if ( $frozen ) {
+		echo "\n";
+		continue;
+	}
+
+	// --- Tabla B: claves nuevas. Solo en modos calendario. ------------------
+	if ( 'legacy' !== $mode ) {
+		echo "\nClaves nuevas:\n";
+		echo e3a_rule( $cols_new ) . "\n";
+		echo e3a_row( e3a_titles( $cols_new ), $cols_new ) . "\n";
+		echo e3a_rule( $cols_new ) . "\n";
+
+		foreach ( $cases as $case ) {
+			$label = $case[0];
+			$d     = $resolved[ $label ];
+
+			echo e3a_row(
+				array(
+					$label,
+					$d['days'] ?? '',
+					e3a_bool( $d['is_custom'] ?? false ),
+					'' === ( $d['preset_key'] ?? '' ) ? '(vacio)' : $d['preset_key'],
+					'' === ( $d['current_start_utc'] ?? '' ) ? '(vacio)' : $d['current_start_utc'],
+					'' === ( $d['current_end_utc'] ?? '' ) ? '(vacio)' : $d['current_end_utc'],
+					'' === ( $d['prev_start_utc'] ?? '' ) ? '(vacio)' : $d['prev_start_utc'],
+					'' === ( $d['prev_end_utc'] ?? '' ) ? '(vacio)' : $d['prev_end_utc'],
+				),
+				$cols_new
+			) . "\n";
+		}
+
+		echo e3a_rule( $cols_new ) . "\n";
+	}
+
+	// --- label / prev_label / notice ---------------------------------------
+	echo "\nlabel / prev_label / notice:\n";
+	foreach ( $cases as $case ) {
+		$label = $case[0];
+		$d     = $resolved[ $label ];
+
+		printf( "  %-38s label      : %s\n", $label, (string) ( $d['label'] ?? '' ) );
+		printf( "  %-38s prev_label : %s\n", '', (string) ( $d['prev_label'] ?? '' ) );
+		if ( '' !== (string) ( $d['notice'] ?? '' ) ) {
+			printf( "  %-38s notice     : %s\n", '', (string) $d['notice'] );
+		}
+	}
+
+	// --- Invariantes -------------------------------------------------------
+	echo "\nInvariantes en este modo:\n";
+
+	$d30 = e3a_resolve_case( '30' );
+
+	printf(
+		"  prev_end !== current_start (sin doble conteo)  : %s   (prev_end=%s / current_start=%s)\n",
+		( ( $d30['prev_end'] ?? '' ) !== ( $d30['current_start'] ?? '' ) ) ? 'SI' : 'NO',
+		(string) ( $d30['prev_end'] ?? '' ),
+		(string) ( $d30['current_start'] ?? '' )
+	);
+	printf(
+		"  limites en medianoche / fin de dia            : %s\n",
+		( substr( (string) ( $d30['current_start'] ?? '' ), 11 ) === '00:00:00'
+		  && substr( (string) ( $d30['current_end'] ?? '' ), 11 ) === '23:59:59' ) ? 'SI' : 'NO'
+	);
+	printf(
+		"  current_end_utc con fecha distinta de current_end: %s   (%s vs %s)\n",
+		( substr( (string) ( $d30['current_end_utc'] ?? '' ), 0, 10 ) !== substr( (string) ( $d30['current_end'] ?? '' ), 0, 10 ) ) ? 'SI' : 'NO',
+		substr( (string) ( $d30['current_end'] ?? '' ), 0, 10 ),
+		substr( (string) ( $d30['current_end_utc'] ?? '' ), 0, 10 )
+	);
+
+	echo "\n";
 }
 
-// Comprobaciones de invariantes que el cambio a dias calendario va a tocar.
+// ---------------------------------------------------------------------------
+// El chequeo que decide si las claves _utc se estan usando de verdad
+// ---------------------------------------------------------------------------
+
+if ( $frozen ) {
+	exit( 0 );
+}
+
 echo str_repeat( '=', 152 ) . "\n";
-echo "Invariantes observadas hoy (no son aserciones: son el estado actual, para diffear despues)\n";
+echo "PRUEBA DE PERTENENCIA: user_registered = '2026-07-30 04:28:31' (UTC)\n";
 echo str_repeat( '=', 152 ) . "\n";
+echo "Ese instante es el 29 de julio 23:28:31 hora local de Bogota. Es un usuario\n";
+echo "que se registro ANOCHE en hora local, pero que WordPress guardo con fecha UTC\n";
+echo "del dia siguiente. La pregunta es si el dashboard lo cuenta en 'hoy'.\n";
+echo "Se evalua contra la ventana ACTUAL de period=7, con las claves _utc, que son\n";
+echo "las que leen las 6 queries de user_registered.\n\n";
 
-$GLOBALS['e3a_test_tz_override'] = $timezones[0];
-unset( $_GET['period'] );
+$probe = '2026-07-30 04:28:31';
 
-$d30 = DatePeriod::resolve( '30' );
-$dal = DatePeriod::resolve( 'all' );
+printf( "  %-14s %-21s %-21s %s\n", 'modo', 'current_start_utc', 'current_end_utc', 'el registro cae' );
+echo '  ' . str_repeat( '-', 78 ) . "\n";
 
-printf(
-	"  prev_end === current_start                       : %s   (%s)\n",
-	$d30['prev_end'] === $d30['current_start'] ? 'SI' : 'NO',
-	$d30['prev_end']
-);
-printf(
-	"  current_end lleva segundos (rompe cache de pais) : %s   (%s)\n",
-	preg_match( '/ \d{2}:\d{2}:\d{2}$/', $d30['current_end'] ) ? 'SI' : 'NO',
-	$d30['current_end']
-);
-printf(
-	"  ventanas ancladas a 'ahora', no a medianoche      : %s\n",
-	substr( $d30['current_end'], 11 ) !== '00:00:00' ? 'SI' : 'NO'
-);
-printf(
-	"  period=all: period_int                           : %d   (0 es el valor que rompia el form de abandono)\n",
-	$dal['period_int']
-);
-printf(
-	"  period=all: prev_* vacios (sin comparativa)      : %s\n",
-	( '' === $dal['prev_start'] && '' === $dal['prev_end'] ) ? 'SI' : 'NO'
-);
-printf(
-	"  period=all: current_start = MIN(post_date)       : %s\n",
-	$dal['current_start']
-);
+foreach ( array( 'legacy', 'calendar', 'calendar_utc' ) as $mode ) {
+	e3a_test_set_option( 'e3a_date_mode', $mode );
+
+	$d = e3a_resolve_case( '7' );
+
+	$s = (string) ( $d['current_start_utc'] ?? '' );
+	$e = (string) ( $d['current_end_utc'] ?? '' );
+
+	$inside = ( '' !== $s && '' !== $e && $probe >= $s && $probe <= $e );
+
+	printf(
+		"  %-14s %-21s %-21s %s\n",
+		$mode,
+		$s,
+		$e,
+		$inside ? 'DENTRO' : 'FUERA'
+	);
+}
+
+echo "\n  Esperado: FUERA en legacy y DENTRO en calendar_utc, con CUALQUIERA de los\n";
+echo "  tres relojes. Si no cambia entre modos, las claves _utc no se estan usando.\n";
 echo "\n";
+echo "  'calendar' depende del reloj, y eso es informativo por si mismo:\n";
+echo "    - reloj 23:28 local del 29: FUERA. El dia calendario local termina a las\n";
+echo "      23:59:59 locales, que en UTC son las 04:59:59 del 30, pero sin conversion\n";
+echo "      el limite se compara como '2026-07-29 23:59:59' contra una columna UTC.\n";
+echo "    - reloj 00:01 local del 30: DENTRO, pero por accidente: la ventana de 7 dias\n";
+echo "      ya se corrio e incluye todo el 30 local, asi que barre el instante UTC.\n";
+echo "  O sea: los dias completos por si solos NO arreglan el desfase de zona.\n";
+echo "  Hace falta la conversion, y por eso existe calendar_utc.\n\n";
