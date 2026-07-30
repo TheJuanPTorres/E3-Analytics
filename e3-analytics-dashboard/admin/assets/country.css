@@ -1,0 +1,215 @@
+/* =========================
+   E3 Analytics – Country tab
+   Archivo: admin/assets/country.css
+   ========================= */
+
+/* Layout base */
+.e3-country-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+/* Empuja botones a la derecha dentro del toolbar */
+.e3-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+/* =========================
+   Botón "Descargar usuarios"
+   ========================= */
+
+/* Estilo base del botón oscuro */
+.e3-shell .e3-btn.e3-btn--dark {
+  background: linear-gradient(180deg, #0f172a, #111827) !important;
+  border: 1px solid rgba(15, 23, 42, .35) !important;
+  box-shadow: 0 16px 26px rgba(2, 6, 23, .18) !important;
+  color: #ffffff !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none !important;
+}
+
+.e3-shell .e3-btn.e3-btn--dark .dashicons {
+  color: #ffffff !important;
+}
+
+/* Hover/active para look premium */
+.e3-shell .e3-btn.e3-btn--dark:hover {
+  filter: brightness(1.03);
+  transform: translateY(-1px);
+}
+
+.e3-shell .e3-btn.e3-btn--dark:active {
+  transform: translateY(0);
+}
+
+/* =========================
+   HARD OVERRIDE: fuerza texto blanco
+   (para evitar que WP admin reescriba el color)
+   ========================= */
+
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users,
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users:link,
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users:visited,
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users:hover,
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users:focus,
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users:active {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  opacity: 1 !important;
+  text-decoration: none !important;
+  text-shadow: 0 1px 0 rgba(0,0,0,.18);
+  mix-blend-mode: normal !important;
+  filter: none !important;
+}
+
+/* A veces el icono/herencia también se reescribe */
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users .dashicons,
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users:hover .dashicons,
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users:focus .dashicons,
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users:active .dashicons {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  opacity: 1 !important;
+}
+
+/* Asegura que el <a class="button ..."> mantenga el look oscuro */
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users.button,
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users.button:link,
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users.button:visited {
+  background: linear-gradient(180deg, #0f172a, #111827) !important;
+  border: 1px solid rgba(15, 23, 42, .35) !important;
+  box-shadow: 0 16px 26px rgba(2, 6, 23, .18) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+/* Hover/active */
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users.button:hover {
+  filter: brightness(1.03);
+  transform: translateY(-1px);
+}
+
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users.button:active {
+  transform: translateY(0);
+}
+
+/* Accesibilidad focus */
+body.wp-admin .wrap.e3-shell a.e3-btn--download-users.button:focus {
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .25), 0 16px 26px rgba(2, 6, 23, .18) !important;
+}
+
+/* =========================
+   Help / definiciones
+   ========================= */
+.e3-country-help {
+  margin-top: 12px;
+}
+
+.e3-country-defs {
+  border: 1px solid rgba(148, 163, 184, .22);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(148, 163, 184, .08);
+}
+
+.e3-country-defs summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: rgba(15, 23, 42, .92);
+}
+
+.e3-country-defs ul {
+  margin: 10px 0 0 18px;
+}
+
+.e3-country-defs li {
+  margin: 8px 0;
+  line-height: 1.45;
+}
+
+/* =========================
+   Tablas
+   ========================= */
+.e3-th {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.e3-th-help {
+  opacity: .6;
+  transform: translateY(1px);
+}
+
+.e3-th-help:hover {
+  opacity: 1;
+}
+
+.e3-table-wrap {
+  overflow: auto;
+  border-radius: 16px;
+  margin-top: 12px;
+}
+
+.e3-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 860px;
+}
+
+.e3-table th,
+.e3-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, .22);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.e3-table th {
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 1;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.e3-table tr:hover td {
+  background: rgba(148, 163, 184, .08);
+}
+
+/* Top 10: tabla debajo del gráfico */
+.e3-country-top10-wrap {
+  margin-top: 12px;
+}
+
+.e3-country-note {
+  margin-top: 10px;
+  font-size: 12.5px;
+}
+
+/* =========================
+   Pills
+   ========================= */
+.e3-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(37, 99, 235, .08);
+  color: rgba(30, 64, 175, 1);
+}
+
+.e3-pill--muted {
+  background: rgba(100, 116, 139, .10);
+  color: rgba(51, 65, 85, 1);
+}

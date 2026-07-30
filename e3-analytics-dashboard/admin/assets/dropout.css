@@ -1,0 +1,57 @@
+/*
+  Estilos específicos para la página de Avance en abandono.
+  Nota: el grueso del diseño está en admin.css.
+*/
+
+.e3-shell .e3-table .e3-th-course,
+.e3-shell .e3-table .e3-td-course{
+  min-width: 260px;
+  max-width: 420px;
+}
+
+.e3-shell .e3-table .e3-td-course{
+  font-weight: 600;
+}
+
+.e3-shell .e3-td-bucket{
+  width: 140px;
+}
+
+.e3-shell .e3-bucket-pill{
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  border-radius: 16px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid rgba(15,23,42,.08);
+  box-shadow: 0 10px 20px rgba(15,23,42,.05);
+}
+
+.e3-shell .e3-bucket-n{
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--e3-text);
+  line-height: 1.1;
+}
+
+.e3-shell .e3-bucket-p{
+  font-size: 12px;
+  color: var(--e3-muted);
+  font-weight: 700;
+}
+
+/* Aire adicional en tablas de buckets para evitar “amontonado” */
+.e3-shell .e3-table td.e3-td-bucket{
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+@media (max-width: 782px){
+  .e3-shell .e3-td-bucket{ width: 160px; }
+}
+
+/* Más aire entre cards (Avance en abandono) */
+.e3-shell .e3-canvas > .e3-card{
+  margin-top: 26px;
+}
