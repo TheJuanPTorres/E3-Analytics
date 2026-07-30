@@ -113,8 +113,10 @@ final class Page {
             wp_die( __( 'No tienes permisos suficientes para ver esta página.', 'e3-analytics' ) );
         }
 
+        $period = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : null;
+
         $service = new MetricsService();
-        $data    = $service->get_dashboard_data();
+        $data    = $service->get_dashboard_data( $period );
 
         $chart_payload = [
             'labels'    => $data['chart']['labels'] ?? [],

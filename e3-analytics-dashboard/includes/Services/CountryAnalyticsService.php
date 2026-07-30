@@ -19,11 +19,25 @@ final class CountryAnalyticsService {
         $is_all     = (bool) ( $dates['is_all'] ?? false );
 
         $cache_key = 'e3a_country_' . md5( $period_key . '|' . $start . '|' . $end );
+
+        // Identidad del período con el que se calculan las métricas de este payload.
+        // Se guarda dentro del transient para poder validarlo al leerlo.
+        $computed_for = [
+            'period_key'    => $period_key,
+            'current_start' => $start,
+            'current_end'   => $end,
+        ];
+
         $cached = get_transient( $cache_key );
-        if ( is_array( $cached ) ) {
-            $cached['dates'] = $dates;
+        if ( is_array( $cached )
+             && isset( $cached['_computed_for'] )
+             && $cached['_computed_for'] === $computed_for ) {
+            // Las fechas cacheadas coinciden con las del request: los números son válidos.
             return $cached;
         }
+        // Sin coincidencia (o payload viejo sin '_computed_for') → cache miss: recalcular.
+        // No se sobrescriben las fechas de un payload cacheado: eso mostraría
+        // una cabecera con un rango y métricas de otro.
 
         global $wpdb;
         $post_type = apply_filters( 'e3a_enrollment_post_type', 'tutor_enrolled' );
@@ -197,6 +211,7 @@ final class CountryAnalyticsService {
         ];
 
         $out = [
+            '_computed_for' => $computed_for,
             'dates'   => $dates,
             'totals'  => [
                 'users_total'     => $total_users,

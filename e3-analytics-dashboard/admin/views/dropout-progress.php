@@ -265,7 +265,7 @@ if ( $selected_course_id > 0 ) {
       <div class="e3-toolbar" style="margin-top:0;">
         <form method="get" class="e3-toolbar-form">
           <input type="hidden" name="page" value="e3-analytics-dropout-progress" />
-          <input type="hidden" name="period" value="<?php echo esc_attr( $period ); ?>" />
+          <input type="hidden" name="period" value="<?php echo esc_attr( $period_key ); ?>" />
 
           <div class="e3-field" style="min-width:260px;">
             <label class="e3-field-label" for="e3-course">Curso</label>
