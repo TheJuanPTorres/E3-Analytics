@@ -128,7 +128,7 @@ final class CountryUsersExportService {
                     'name' => 'Resumen',
                     'rows' => [
                         [ 'Generado',             $now ],
-                        [ 'Período',              $period_key ],
+                        [ 'Período',              (string) ( $dates['label'] ?? $period_key ) ],
                         [ 'Rango',                $start . ' — ' . $end ],
                         [ 'Usuarios detectados',  (int) $total ],
                         [ 'Usuarios exportados',  (int) count( $user_ids ) ],

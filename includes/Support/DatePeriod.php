@@ -37,8 +37,17 @@ final class DatePeriod {
 	/** Presets de unidad calendario. Calculados, pero NO expuestos en el selector (eso es B2). */
 	const CALENDAR_PRESETS = array( 'this_month', 'last_month', 'this_quarter', 'this_year', 'last_year' );
 
-	/** Tope provisorio del rango custom, en días. Filtrable con e3a_max_custom_range_days. */
-	const DEFAULT_MAX_CUSTOM_DAYS = 730;
+	/**
+	 * Tope del rango custom, en días. Filtrable con e3a_max_custom_range_days.
+	 *
+	 * 3650 días (~10 años). Medido en producción: la historia completa del sitio
+	 * son 1.437 días, y period=all tarda 2,79 s con 7.064 queries contra un
+	 * max_execution_time de 300 s. Con el tope anterior de 730 la clienta no
+	 * podía seleccionar a mano su propia historia completa: el tope dejaba de
+	 * proteger y pasaba a ser una regresión funcional. El filtro queda por si el
+	 * plugin se reutiliza en un sitio más grande.
+	 */
+	const DEFAULT_MAX_CUSTOM_DAYS = 3650;
 
 	/**
 	 * Presets que se ofrecen en el selector de período de las 3 vistas.
@@ -51,12 +60,49 @@ final class DatePeriod {
 	 */
 	public static function presets() {
 		return array(
-			'7'   => __( 'Últimos 7 días', 'e3-analytics' ),
-			'30'  => __( 'Últimos 30 días', 'e3-analytics' ),
-			'90'  => __( 'Últimos 90 días', 'e3-analytics' ),
-			'365' => __( 'Últimos 12 meses', 'e3-analytics' ),
-			'all' => __( 'Histórico completo', 'e3-analytics' ),
+			'7'            => __( 'Últimos 7 días', 'e3-analytics' ),
+			'30'           => __( 'Últimos 30 días', 'e3-analytics' ),
+			'90'           => __( 'Últimos 90 días', 'e3-analytics' ),
+			'365'          => __( 'Últimos 365 días', 'e3-analytics' ),
+			'this_month'   => __( 'Este mes', 'e3-analytics' ),
+			'last_month'   => __( 'Mes pasado', 'e3-analytics' ),
+			'this_quarter' => __( 'Este trimestre', 'e3-analytics' ),
+			'this_year'    => __( 'Este año', 'e3-analytics' ),
+			'last_year'    => __( 'Año pasado', 'e3-analytics' ),
+			'all'          => __( 'Histórico completo', 'e3-analytics' ),
 		);
+	}
+
+	/**
+	 * ¿Esta clave es un rango personalizado 'YYYY-MM-DD..YYYY-MM-DD'?
+	 *
+	 * Lo usan las vistas para saber si preseleccionar "Rango personalizado" en el
+	 * selector y repoblar los dos inputs de fecha.
+	 *
+	 * @param string $key
+	 * @return bool
+	 */
+	public static function is_custom_key( $key ) {
+		return 1 === preg_match( '/^\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$/', (string) $key );
+	}
+
+	/**
+	 * Formato de fecha para las etiquetas legibles.
+	 *
+	 * NO se usa get_option('date_format') a propósito. El sitio lo tiene en
+	 * 'm/d/Y' y con eso un rango se vería "03/01/2026 – 04/15/2026", que un
+	 * lector de habla hispana interpreta como 3 de enero a 15 de abril. Esa
+	 * cadena viaja al nombre del archivo de export y a la hoja Resumen, así que
+	 * la ambigüedad no es solo de pantalla.
+	 *
+	 * 'j M Y' con locale es_ES da "1 mar 2026": inequívoco.
+	 *
+	 * @return string
+	 */
+	public static function label_date_format() {
+		$format = (string) apply_filters( 'e3a_label_date_format', 'j M Y' );
+
+		return '' !== $format ? $format : 'j M Y';
 	}
 
 	/**
@@ -129,8 +175,15 @@ final class DatePeriod {
 			$raw = sanitize_text_field( (string) $period_override );
 		}
 
-		if ( null === $raw ) {
-			$raw = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : '30';
+		/*
+		 * Sin fallback a $_GET. Admin\Page es el único lector del request y
+		 * compone el escalar 'period' en un solo lugar (Page::read_period()).
+		 * Un solo punto de lectura por request: si acá volviera a leerse la
+		 * superglobal, un servicio invocado con un período explícito podría
+		 * quedar resolviendo otro distinto según la URL.
+		 */
+		if ( null === $raw || '' === $raw ) {
+			$raw = '30';
 		}
 
 		if ( self::MODE_LEGACY === $mode ) {
@@ -810,10 +863,7 @@ final class DatePeriod {
 			return '';
 		}
 
-		$format = (string) get_option( 'date_format', 'Y-m-d' );
-		if ( '' === $format ) {
-			$format = 'Y-m-d';
-		}
+		$format = self::label_date_format();
 
 		$a = date_i18n( $format, $start->getTimestamp() + $start->getOffset() );
 		$b = date_i18n( $format, $end->getTimestamp() + $end->getOffset() );
@@ -834,10 +884,7 @@ final class DatePeriod {
 			return '';
 		}
 
-		$format = (string) get_option( 'date_format', 'Y-m-d' );
-		if ( '' === $format ) {
-			$format = 'Y-m-d';
-		}
+		$format = self::label_date_format();
 
 		$a_ts = strtotime( $start );
 		$b_ts = strtotime( $end );

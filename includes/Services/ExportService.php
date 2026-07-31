@@ -31,6 +31,24 @@ final class ExportService {
         return null;
     }
 
+    /**
+     * Sufijo de período para el nombre del archivo.
+     *
+     * El sanitizador de Xlsx::download() permite '-' y '.', así que una clave
+     * como '2026-03-01..2026-04-15' sobrevive intacta. Que el rango viaje en el
+     * nombre es también la mitigación de la carrera de medianoche: si el export
+     * se dispara cruzando la medianoche y resuelve una ventana distinta a la de
+     * la pantalla, el archivo dice exactamente qué contiene.
+     *
+     * @param array $dates
+     * @return string
+     */
+    private function filename_suffix( $dates ) {
+        $key = (string) ( $dates['period_key'] ?? '' );
+
+        return '' !== $key ? '-' . $key : '';
+    }
+
     private function build_dashboard( $key, $args ) {
         $period = isset( $args['period'] ) ? (string) $args['period'] : null;
         $dates  = DatePeriod::resolve( $period );
@@ -52,7 +70,7 @@ final class ExportService {
             'name' => 'Resumen',
             'rows' => [
                 [ 'Generado', $now ],
-                [ 'Período', (string) ( $dates['period_key'] ?? '' ) ],
+                [ 'Período', (string) ( $dates['label'] ?? $dates['period_key'] ?? '' ) ],
                 [ 'Rango', $start . ' — ' . $end ],
                 [ 'Reporte', 'dashboard:' . $key ],
             ],
@@ -63,25 +81,25 @@ final class ExportService {
                 $rows = $this->get_users_registered_between( $start_utc, $end_utc );
                 $sheets[] = [ 'name' => 'Usuarios', 'rows' => $rows ];
                 $this->maybe_add_user_meta_sheet( $sheets, $rows );
-                return [ 'filename' => 'e3-dashboard-nuevos-registros', 'sheets' => $sheets ];
+                return [ 'filename' => 'e3-dashboard-nuevos-registros' . $this->filename_suffix( $dates ), 'sheets' => $sheets ];
 
             case 'first_time_enrollments':
                 $rows = $this->get_first_time_enrollments_between( $start, $end, $end );
                 $sheets[] = [ 'name' => 'PrimerasInscrip', 'rows' => $rows ];
                 $this->maybe_add_user_meta_sheet( $sheets, $rows, 'user_id' );
-                return [ 'filename' => 'e3-dashboard-nuevos-inscritos', 'sheets' => $sheets ];
+                return [ 'filename' => 'e3-dashboard-nuevos-inscritos' . $this->filename_suffix( $dates ), 'sheets' => $sheets ];
 
             case 'enrollments':
                 $rows = $this->get_enrollments_between( $start, $end );
                 $sheets[] = [ 'name' => 'Inscripciones', 'rows' => $rows ];
                 $this->maybe_add_user_meta_sheet( $sheets, $rows, 'user_id' );
-                return [ 'filename' => 'e3-dashboard-inscripciones', 'sheets' => $sheets ];
+                return [ 'filename' => 'e3-dashboard-inscripciones' . $this->filename_suffix( $dates ), 'sheets' => $sheets ];
 
             case 'active_users':
                 $rows = $this->get_active_users_between( $start, $end );
                 $sheets[] = [ 'name' => 'UsuariosActivos', 'rows' => $rows ];
                 $this->maybe_add_user_meta_sheet( $sheets, $rows, 'user_id' );
-                return [ 'filename' => 'e3-dashboard-usuarios-activos', 'sheets' => $sheets ];
+                return [ 'filename' => 'e3-dashboard-usuarios-activos' . $this->filename_suffix( $dates ), 'sheets' => $sheets ];
 
             case 'cross_course_users':
                 if ( $is_all ) {
@@ -91,7 +109,7 @@ final class ExportService {
                 }
                 $sheets[] = [ 'name' => 'UsuariosOtroCurso', 'rows' => $rows ];
                 $this->maybe_add_user_meta_sheet( $sheets, $rows, 'user_id' );
-                return [ 'filename' => 'e3-dashboard-usuarios-otro-curso', 'sheets' => $sheets ];
+                return [ 'filename' => 'e3-dashboard-usuarios-otro-curso' . $this->filename_suffix( $dates ), 'sheets' => $sheets ];
 
 
             case 'performance':
@@ -138,7 +156,7 @@ final class ExportService {
                 }
 
                 $fileKey = $key ?: 'dashboard';
-                return [ 'filename' => 'e3-dashboard-' . $fileKey, 'sheets' => $sheets ];
+                return [ 'filename' => 'e3-dashboard-' . $fileKey . $this->filename_suffix( $dates ), 'sheets' => $sheets ];
         }
     }
 
@@ -162,7 +180,7 @@ final class ExportService {
             'name' => 'Resumen',
             'rows' => [
                 [ 'Generado', $now ],
-                [ 'Período', (string) ( $dates['period_key'] ?? '' ) ],
+                [ 'Período', (string) ( $dates['label'] ?? $dates['period_key'] ?? '' ) ],
                 [ 'Rango', $start . ' — ' . $end ],
                 [ 'Reporte', 'dropout:' . $key ],
                 [ 'Curso ID', $course_id ],
@@ -176,12 +194,12 @@ final class ExportService {
                 // Selected course users list.
                 if ( $course_id <= 0 ) {
                     $sheets[] = [ 'name' => 'Usuarios', 'rows' => [ [ 'Selecciona un curso para exportar el listado de usuarios.' ] ] ];
-                    return [ 'filename' => 'e3-dropout-usuarios', 'sheets' => $sheets ];
+                    return [ 'filename' => 'e3-dropout-usuarios' . $this->filename_suffix( $dates ), 'sheets' => $sheets ];
                 }
                 $rows = $this->get_dropout_users_by_course( $period, $course_id, $bucket, $q );
                 $sheets[] = [ 'name' => 'Usuarios', 'rows' => $rows ];
                 $this->maybe_add_user_meta_sheet( $sheets, $rows, 'user_id' );
-                return [ 'filename' => 'e3-dropout-usuarios-curso-' . $course_id, 'sheets' => $sheets ];
+                return [ 'filename' => 'e3-dropout-usuarios-curso-' . $course_id . $this->filename_suffix( $dates ), 'sheets' => $sheets ];
 
             case 'dropout_distribution':
             case 'dropout_course_detail':
@@ -204,7 +222,7 @@ final class ExportService {
                     $this->maybe_add_user_meta_sheet( $sheets, $users, 'user_id' );
                 }
 
-                return [ 'filename' => 'e3-dropout-' . ( $key ?: 'reporte' ), 'sheets' => $sheets ];
+                return [ 'filename' => 'e3-dropout-' . ( $key ?: 'reporte' ) . $this->filename_suffix( $dates ), 'sheets' => $sheets ];
         }
     }
 
@@ -1011,7 +1029,7 @@ private function user_header( $include_id = true ) {
             'name' => 'Resumen',
             'rows' => [
                 [ 'Generado', $now ],
-                [ 'Período', (string) ( $dates['period_key'] ?? '' ) ],
+                [ 'Período', (string) ( $dates['label'] ?? $dates['period_key'] ?? '' ) ],
                 [ 'Rango', (string) ( $dates['current_start'] ?? '' ) . ' — ' . (string) ( $dates['current_end'] ?? '' ) ],
                 [ 'Reporte', 'country:' . (string) $key ],
                 [ 'Cobertura país', (string) ( ( $report['totals']['coverage_percent'] ?? 0 ) . '%' ) ],
@@ -1038,7 +1056,7 @@ private function user_header( $include_id = true ) {
         $sheets[] = [ 'name' => 'Países', 'rows' => $table ];
 
         return [
-            'filename' => 'e3-analytics-paises',
+            'filename' => 'e3-analytics-paises' . $this->filename_suffix( $dates ),
             'sheets'   => $sheets,
         ];
     }

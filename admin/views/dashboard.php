@@ -18,23 +18,11 @@ $period_key    = (string) ( $data['period_key'] ?? '' );
 $is_all        = (bool) ( $data['is_all'] ?? false );
 $has_compare   = ( $prev_start !== '' && $prev_end !== '' );
 
-$fmt_date = function( $mysql ) {
-  if ( ! $mysql ) return '';
-  $ts = strtotime( $mysql );
-  if ( ! $ts ) return (string) $mysql;
-  return date_i18n( get_option( 'date_format' ), $ts );
-};
-$fmt_range = function( $start, $end ) use ( $fmt_date ) {
-  $a = $fmt_date( $start );
-  $b = $fmt_date( $end );
-  if ( $a === '' && $b === '' ) return '';
-  if ( $a === '' ) return $b;
-  if ( $b === '' ) return $a;
-  return $a . ' – ' . $b;
-};
-
-$current_range = $fmt_range( $current_start, $current_end );
-$prev_range    = $fmt_range( $prev_start, $prev_end );
+// Etiquetas legibles: las arma DatePeriod con un formato explícito ('j M Y'),
+// no con date_format del sitio, que acá es 'm/d/Y' y vuelve ambiguo el rango.
+$current_range = (string) ( $data['label'] ?? '' );
+$prev_range    = (string) ( $data['prev_label'] ?? '' );
+$notice        = (string) ( $data['notice'] ?? '' );
 
 
 $active_users       = (int) ( $kpi['active_users'] ?? 0 );
@@ -60,21 +48,37 @@ $ret_windows = [
 $courses_stats = $data['courses_stats'] ?? [];
 $top_courses   = array_slice( $courses_stats, 0, 5 );
 
-$dashboard_url = admin_url( 'admin.php?page=e3-analytics-dashboard&period=' . rawurlencode( $period_key ) );
-$dropout_url   = admin_url( 'admin.php?page=e3-analytics-dropout-progress&period=' . rawurlencode( $period_key ) );
-$country_url   = admin_url( 'admin.php?page=e3-analytics-country-analysis&period=' . rawurlencode( $period_key ) );
+/*
+ * Estado que se arrastra al cambiar de pestaña y a los export.
+ * El filtro es explícito a propósito: array_filter() sin callback descarta todo
+ * valor falsy, y eso se comería un bucket '0' o una búsqueda literal de "0".
+ */
+$state = array_filter(
+  [ 'period' => $period_key ],
+  static function ( $v ) { return $v !== null && $v !== ''; }
+);
+
+$nav_url = static function ( $page ) use ( $state ) {
+  return add_query_arg( array_merge( [ 'page' => $page ], $state ), admin_url( 'admin.php' ) );
+};
+
+$dashboard_url = $nav_url( 'e3-analytics-dashboard' );
+$dropout_url   = $nav_url( 'e3-analytics-dropout-progress' );
+$country_url   = $nav_url( 'e3-analytics-country-analysis' );
 
 $export_base  = admin_url( 'admin-post.php' );
 $export_nonce = wp_create_nonce( 'e3a_export_excel' );
-$export_url   = function( $key ) use ( $export_base, $export_nonce, $period_key ) {
+$export_url   = function( $key ) use ( $export_base, $export_nonce, $state ) {
   return add_query_arg(
-    [
-      'action'  => 'e3a_export_excel',
-      'scope'   => 'dashboard',
-      'key'     => $key,
-      'period'  => $period_key,
-      '_wpnonce'=> $export_nonce,
-    ],
+    array_merge(
+      [
+        'action'  => 'e3a_export_excel',
+        'scope'   => 'dashboard',
+        'key'     => $key,
+        '_wpnonce'=> $export_nonce,
+      ],
+      $state
+    ),
     $export_base
   );
 };
@@ -94,6 +98,10 @@ $users_url     = admin_url( 'users.php' );
 $chart_labels = $data['chart']['labels'] ?? [];
 $chart_first  = $data['chart']['first'] ?? [];
 $chart_return = $data['chart']['returning'] ?? [];
+
+// Estado vacío: con 0 inscripciones, completion_rate da 0 y dropout_rate da 100,
+// lo que dispararía el banner rojo de abandono crítico sobre un período sin datos.
+$has_data = $current_enrolls > 0;
 
 $ret_30_rate  = (float) ( $ret['30']['rate'] ?? 0 );
 $health_score = (int) round(
@@ -116,6 +124,10 @@ $dash_empty    = round($circumference - $dash_filled, 2);
 <div class="wrap e3-shell">
   <div class="e3-canvas">
 
+    <?php if ( $notice !== '' ) : ?>
+      <div class="notice notice-warning e3-notice-wp"><p><?php echo esc_html( $notice ); ?></p></div>
+    <?php endif; ?>
+
     <div class="e3-topbar">
       <div class="e3-topbar-left">
         <div class="e3-badge-icon" aria-hidden="true">
@@ -134,7 +146,8 @@ $dash_empty    = round($circumference - $dash_filled, 2);
         <div class="e3-meta e3-meta--current">
           <div class="e3-meta-label">Período analizado</div>
           <div class="e3-meta-value"><?php echo esc_html( $current_range ); ?></div>
-          <?php if ( $has_compare ): ?>
+          <div class="e3-meta-note">El último día está en curso: sus datos son parciales.</div>
+          <?php if ( $has_compare && $prev_range !== '' ): ?>
             <div class="e3-meta-label" style="margin-top:6px;">Comparación</div>
             <div class="e3-meta-value"><?php echo esc_html( $prev_range ); ?></div>
           <?php endif; ?>
@@ -159,14 +172,7 @@ $dash_empty    = round($circumference - $dash_filled, 2);
       <form method="get" class="e3-toolbar-form">
         <input type="hidden" name="page" value="e3-analytics-dashboard" />
 
-        <div class="e3-field">
-          <label class="e3-field-label" for="e3-period">Período</label>
-          <select id="e3-period" name="period" class="e3-select">
-<?php foreach ( \E3_Analytics\Support\DatePeriod::presets() as $preset_key => $preset_label ) : ?>
-            <option value="<?php echo esc_attr( $preset_key ); ?>" <?php selected( $period_key, $preset_key ); ?>><?php echo esc_html( $preset_label ); ?></option>
-<?php endforeach; ?>
-          </select>
-        </div>
+        <?php require E3A_PATH . 'admin/views/partials/period-selector.php'; ?>
 
         <button type="submit" class="button button-primary e3-btn">Actualizar</button>
       </form>
@@ -190,7 +196,7 @@ $dash_empty    = round($circumference - $dash_filled, 2);
       </a>
     </nav>
 
-    <?php if ( $dropout_rate > 60 ) : ?>
+    <?php if ( $has_data && $dropout_rate > 60 ) : ?>
       <div class="e3-notice e3-notice--warn" role="alert">
         <span class="dashicons dashicons-warning" aria-hidden="true"></span>
         <div>
@@ -213,18 +219,23 @@ $dash_empty    = round($circumference - $dash_filled, 2);
             <div class="e3-kpi-icon" aria-hidden="true"><span class="dashicons dashicons-admin-users"></span></div>
             <div class="e3-kpi-label">Nuevos registros</div>
             <div class="e3-kpi-pill <?php
-              if ( ! $has_compare ) {
+              // null = hubo período previo pero estaba vacío: no hay base.
+              // NO convertir a 0 con ?? ni con cast: se leería como "sin cambio".
+              $g = $kpi['growth_new_users'] ?? null;
+              if ( ! $has_compare || null === $g ) {
                 echo 'neutral';
               } else {
-                $g = (float) ( $kpi['growth_new_users'] ?? 0 );
-                echo ( $g >= 0 ) ? 'up' : 'down';
+                echo ( (float) $g >= 0 ) ? 'up' : 'down';
               }
             ?>">
               <?php
+              $g = $kpi['growth_new_users'] ?? null;
               if ( ! $has_compare ) {
                 echo esc_html( '—' );
+              } elseif ( null === $g ) {
+                echo '<abbr title="El período anterior no tuvo registros: no hay base de comparación.">—</abbr>';
               } else {
-                $g = (float) ( $kpi['growth_new_users'] ?? 0 );
+                $g = (float) $g;
                 echo esc_html( ( $g >= 0 ? '+' : '' ) . $g . '%' );
               }
               ?>
@@ -239,18 +250,23 @@ $dash_empty    = round($circumference - $dash_filled, 2);
             <div class="e3-kpi-icon" aria-hidden="true"><span class="dashicons dashicons-welcome-learn-more"></span></div>
             <div class="e3-kpi-label">Nuevos inscritos en cursos</div>
             <div class="e3-kpi-pill <?php
-              if ( ! $has_compare ) {
+              // null = hubo período previo pero estaba vacío: no hay base.
+              // NO convertir a 0 con ?? ni con cast: se leería como "sin cambio".
+              $g = $kpi['growth_first_time_enrollments'] ?? null;
+              if ( ! $has_compare || null === $g ) {
                 echo 'neutral';
               } else {
-                $g = (float) ( $kpi['growth_first_time_enrollments'] ?? 0 );
-                echo ( $g >= 0 ) ? 'up' : 'down';
+                echo ( (float) $g >= 0 ) ? 'up' : 'down';
               }
             ?>">
               <?php
+              $g = $kpi['growth_first_time_enrollments'] ?? null;
               if ( ! $has_compare ) {
                 echo esc_html( '—' );
+              } elseif ( null === $g ) {
+                echo '<abbr title="El período anterior no tuvo registros: no hay base de comparación.">—</abbr>';
               } else {
-                $g = (float) ( $kpi['growth_first_time_enrollments'] ?? 0 );
+                $g = (float) $g;
                 echo esc_html( ( $g >= 0 ? '+' : '' ) . $g . '%' );
               }
               ?>
@@ -265,18 +281,23 @@ $dash_empty    = round($circumference - $dash_filled, 2);
             <div class="e3-kpi-icon" aria-hidden="true"><span class="dashicons dashicons-forms"></span></div>
             <div class="e3-kpi-label">Inscripciones</div>
             <div class="e3-kpi-pill <?php
-              if ( ! $has_compare ) {
+              // null = hubo período previo pero estaba vacío: no hay base.
+              // NO convertir a 0 con ?? ni con cast: se leería como "sin cambio".
+              $g = $kpi['growth_enrollments'] ?? null;
+              if ( ! $has_compare || null === $g ) {
                 echo 'neutral';
               } else {
-                $g = (float) ( $kpi['growth_enrollments'] ?? 0 );
-                echo ( $g >= 0 ) ? 'up' : 'down';
+                echo ( (float) $g >= 0 ) ? 'up' : 'down';
               }
             ?>">
               <?php
+              $g = $kpi['growth_enrollments'] ?? null;
               if ( ! $has_compare ) {
                 echo esc_html( '—' );
+              } elseif ( null === $g ) {
+                echo '<abbr title="El período anterior no tuvo registros: no hay base de comparación.">—</abbr>';
               } else {
-                $g = (float) ( $kpi['growth_enrollments'] ?? 0 );
+                $g = (float) $g;
                 echo esc_html( ( $g >= 0 ? '+' : '' ) . $g . '%' );
               }
               ?>
@@ -359,8 +380,13 @@ $dash_empty    = round($circumference - $dash_filled, 2);
               <div class="e3-insight-sub">Completados: <?php echo number_format_i18n( $current_completed ); ?></div>
             </div>
             <div class="e3-insight-metric">
-              <div class="e3-insight-value"><?php echo esc_html( $completion_rate ); ?>%</div>
-              <div class="e3-insight-small">del total</div>
+              <?php if ( $has_data ) : ?>
+                <div class="e3-insight-value"><?php echo esc_html( $completion_rate ); ?>%</div>
+                <div class="e3-insight-small">del total</div>
+              <?php else : ?>
+                <div class="e3-insight-value e3-insight-value--empty">—</div>
+                <div class="e3-insight-small">Sin datos en este período</div>
+              <?php endif; ?>
             </div>
           </div>
 
@@ -371,8 +397,13 @@ $dash_empty    = round($circumference - $dash_filled, 2);
               <div class="e3-insight-sub">No completado</div>
             </div>
             <div class="e3-insight-metric">
-              <div class="e3-insight-value"><?php echo esc_html( $dropout_rate ); ?>%</div>
-              <div class="e3-insight-small">estimado</div>
+              <?php if ( $has_data ) : ?>
+                <div class="e3-insight-value"><?php echo esc_html( $dropout_rate ); ?>%</div>
+                <div class="e3-insight-small">estimado</div>
+              <?php else : ?>
+                <div class="e3-insight-value e3-insight-value--empty">—</div>
+                <div class="e3-insight-small">Sin datos en este período</div>
+              <?php endif; ?>
             </div>
           </div>
 
@@ -381,6 +412,7 @@ $dash_empty    = round($circumference - $dash_filled, 2);
             <div class="e3-insight-body">
               <div class="e3-insight-title">DAU/MAU</div>
               <div class="e3-insight-sub">Engagement reciente</div>
+              <div class="e3-insight-fixed">No responde al filtro de fechas: siempre 1 día contra 30 días.</div>
             </div>
             <div class="e3-insight-metric">
               <div class="e3-insight-value"><?php echo esc_html( $dau_mau['ratio'] ?? 0 ); ?>%</div>
@@ -407,6 +439,12 @@ $dash_empty    = round($circumference - $dash_filled, 2);
           <div>
             <div class="e3-card-title"><span class="dashicons dashicons-backup" aria-hidden="true"></span> Retención (7 días → Histórico)</div>
             <div class="e3-card-sub">Usuarios registrados en el período seleccionado con actividad reciente.</div>
+            <div class="e3-card-fixed">
+              El filtro de fechas define <strong>quiénes</strong> forman la cohorte, no la ventana
+              de actividad: las ventanas son fijas (7, 14, 30, 60, 90, 180 y 365 días) y se miden
+              siempre hacia atrás desde hoy, con un techo de 365 días. Las tasas de dos períodos
+              distintos no son comparables entre sí.
+            </div>
           </div>
           <div class="e3-tag">Cohortes</div>
         </div>
@@ -503,12 +541,13 @@ $dash_empty    = round($circumference - $dash_filled, 2);
                   <td><?php echo $has_compare ? number_format_i18n( (int) $row->previous_enroll ) : '—'; ?></td>
                   <td>
                     <?php
-                    if ( ! $has_compare ) {
-                      $g = null;
+                    $g = $row->growth_enrollments ?? null;
+                    if ( ! $has_compare || null === $g ) {
+                      // Sin ventana previa, o con la ventana previa vacía.
                       $cls = 'neutral';
                       $txt = '—';
                     } else {
-                      $g = (float) ( $row->growth_enrollments ?? 0 );
+                      $g = (float) $g;
                       $cls = ( $g >= 0 ) ? 'up' : 'down';
                       $txt = ( $g >= 0 ? '+' : '' ) . $g . '%';
                     }

@@ -11,37 +11,36 @@ $is_all     = (bool) ( $dates['is_all'] ?? false );
 $start = (string) ( $dates['current_start'] ?? '' );
 $end   = (string) ( $dates['current_end'] ?? '' );
 
-$fmt_date = function( $mysql ) {
-  if ( ! $mysql ) return '';
-  $ts = strtotime( $mysql );
-  if ( ! $ts ) return (string) $mysql;
-  return date_i18n( get_option( 'date_format' ), $ts );
-};
-$fmt_range = function( $start, $end ) use ( $fmt_date ) {
-  $a = $fmt_date( $start );
-  $b = $fmt_date( $end );
-  if ( $a === '' && $b === '' ) return '';
-  if ( $a === '' ) return $b;
-  if ( $b === '' ) return $a;
-  return $a . ' – ' . $b;
+// Etiqueta legible con formato explícito, no con date_format del sitio.
+$range  = (string) ( $dates['label'] ?? '' );
+$notice = (string) ( $dates['notice'] ?? '' );
+
+// Filtro explícito: array_filter() sin callback descartaría valores falsy.
+$state = array_filter(
+  [ 'period' => $period_key ],
+  static function ( $v ) { return $v !== null && $v !== ''; }
+);
+
+$nav_url = static function ( $page ) use ( $state ) {
+  return add_query_arg( array_merge( [ 'page' => $page ], $state ), admin_url( 'admin.php' ) );
 };
 
-$range = $fmt_range( $start, $end );
-
-$dashboard_url = admin_url( 'admin.php?page=e3-analytics-dashboard&period=' . rawurlencode( $period_key ) );
-$dropout_url   = admin_url( 'admin.php?page=e3-analytics-dropout-progress&period=' . rawurlencode( $period_key ) );
-$country_url   = admin_url( 'admin.php?page=e3-analytics-country-analysis&period=' . rawurlencode( $period_key ) );
+$dashboard_url = $nav_url( 'e3-analytics-dashboard' );
+$dropout_url   = $nav_url( 'e3-analytics-dropout-progress' );
+$country_url   = $nav_url( 'e3-analytics-country-analysis' );
 
 $export_base  = admin_url( 'admin-post.php' );
 $export_nonce = wp_create_nonce( 'e3a_export_excel' );
 $export_url   = add_query_arg(
-  [
-    'action'   => 'e3a_export_excel',
-    'scope'    => 'country',
-    'key'      => 'country_summary',
-    'period'   => $period_key,
-    '_wpnonce' => $export_nonce,
-  ],
+  array_merge(
+    [
+      'action'   => 'e3a_export_excel',
+      'scope'    => 'country',
+      'key'      => 'country_summary',
+      '_wpnonce' => $export_nonce,
+    ],
+    $state
+  ),
   $export_base
 );
 
@@ -53,23 +52,27 @@ $export_url   = add_query_arg(
 $users_export_url = '';
 if ( has_action( 'admin_post_e3a_export_country_users' ) ) {
   $users_export_url = add_query_arg(
-    [
-      'action'   => 'e3a_export_country_users',
-      'period'   => $period_key,
-      '_wpnonce' => wp_create_nonce( 'e3a_export_country_users' ),
-    ],
+    array_merge(
+      [
+        'action'   => 'e3a_export_country_users',
+        '_wpnonce' => wp_create_nonce( 'e3a_export_country_users' ),
+      ],
+      $state
+    ),
     $export_base
   );
 } else {
   // Fallback: solo funcionará si tu ExportService soporta key=country_users.
   $users_export_url = add_query_arg(
-    [
-      'action'   => 'e3a_export_excel',
-      'scope'    => 'country',
-      'key'      => 'country_users',
-      'period'   => $period_key,
-      '_wpnonce' => wp_create_nonce( 'e3a_export_excel' ),
-    ],
+    array_merge(
+      [
+        'action'   => 'e3a_export_excel',
+        'scope'    => 'country',
+        'key'      => 'country_users',
+        '_wpnonce' => wp_create_nonce( 'e3a_export_excel' ),
+      ],
+      $state
+    ),
     $export_base
   );
 }
@@ -102,6 +105,10 @@ $get_flag = static function( $c ) use ( $flag_map ) { return $flag_map[$c] ?? ''
 <div class="wrap e3-shell">
   <div class="e3-canvas">
 
+    <?php if ( $notice !== '' ) : ?>
+      <div class="notice notice-warning e3-notice-wp"><p><?php echo esc_html( $notice ); ?></p></div>
+    <?php endif; ?>
+
     <div class="e3-topbar">
       <div class="e3-topbar-left">
         <div class="e3-badge-icon" aria-hidden="true">
@@ -120,6 +127,7 @@ $get_flag = static function( $c ) use ( $flag_map ) { return $flag_map[$c] ?? ''
         <div class="e3-meta e3-meta--current">
           <div class="e3-meta-label"><?php echo esc_html( $is_all ? 'Histórico completo' : 'Período analizado' ); ?></div>
           <div class="e3-meta-value"><?php echo esc_html( $range ); ?></div>
+          <div class="e3-meta-note">El último día está en curso: sus datos son parciales.</div>
         </div>
 
         <div class="e3-meta e3-meta--compare">
@@ -136,14 +144,7 @@ $get_flag = static function( $c ) use ( $flag_map ) { return $flag_map[$c] ?? ''
       <form method="get" class="e3-toolbar-form">
         <input type="hidden" name="page" value="e3-analytics-country-analysis" />
 
-        <div class="e3-field">
-          <label class="e3-field-label" for="e3-period">Período</label>
-          <select id="e3-period" name="period" class="e3-select">
-<?php foreach ( \E3_Analytics\Support\DatePeriod::presets() as $preset_key => $preset_label ) : ?>
-            <option value="<?php echo esc_attr( $preset_key ); ?>" <?php selected( $period_key, $preset_key ); ?>><?php echo esc_html( $preset_label ); ?></option>
-<?php endforeach; ?>
-          </select>
-        </div>
+        <?php require E3A_PATH . 'admin/views/partials/period-selector.php'; ?>
 
         <span class="e3-toolbar-spacer" aria-hidden="true"></span>
 

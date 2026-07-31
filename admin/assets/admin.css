@@ -881,3 +881,15 @@
   color: var(--e3-muted);
   background: rgba(248, 250, 252, .75);
 }
+
+/* ---- B3: rango personalizado, avisos y estados vacios ---- */
+.e3-shell .e3-input--date { min-width: 150px; }
+.e3-shell .e3-custom-range[hidden] { display: none; }
+.e3-shell .e3-meta-note { font-size: 11px; color: rgba(255,255,255,.5); margin-top: 4px; line-height: 1.4; }
+.e3-shell .e3-card-fixed { font-size: 11.5px; color: var(--e3-text-muted, #6b7280); margin-top: 6px;
+  line-height: 1.5; padding: 6px 10px; border-left: 2px solid var(--e3-border, #e5e7eb);
+  background: var(--e3-bg-soft, #f9fafb); border-radius: 0 4px 4px 0; }
+.e3-shell .e3-insight-fixed { font-size: 10.5px; color: var(--e3-text-muted, #9ca3af);
+  margin-top: 2px; line-height: 1.4; }
+.e3-shell .e3-insight-value--empty { color: var(--e3-text-muted, #9ca3af); }
+.e3-notice-wp { margin: 0 0 16px; }

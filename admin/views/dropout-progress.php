@@ -10,25 +10,12 @@ $period  = (int) ( $dates['period_int'] ?? 30 );
 $period_key = (string) ( $dates['period_key'] ?? '' );
 $is_all     = (bool) ( $dates['is_all'] ?? false );
 
-$fmt_date = function( $mysql ) {
-  if ( ! $mysql ) return '';
-  $ts = strtotime( $mysql );
-  if ( ! $ts ) return (string) $mysql;
-  return date_i18n( get_option( 'date_format' ), $ts );
-};
-$fmt_range = function( $start, $end ) use ( $fmt_date ) {
-  $a = $fmt_date( $start );
-  $b = $fmt_date( $end );
-  if ( $a === '' && $b === '' ) return '';
-  if ( $a === '' ) return $b;
-  if ( $b === '' ) return $a;
-  return $a . ' – ' . $b;
-};
-
 $current_start = (string) ( $dates['current_start'] ?? '' );
 $current_end   = (string) ( $dates['current_end'] ?? '' );
 
-$current_range = $fmt_range( $current_start, $current_end );
+// Etiqueta legible con formato explícito, no con date_format del sitio.
+$current_range = (string) ( $dates['label'] ?? '' );
+$notice        = (string) ( $dates['notice'] ?? '' );
 
 $summary = $report['summary'] ?? [];
 $courses = $report['courses'] ?? [];
@@ -41,24 +28,46 @@ $selected_course_id = (int) ( $filters['course_id'] ?? 0 );
 $selected_bucket    = (string) ( $filters['bucket'] ?? '' );
 $selected_q         = (string) ( $filters['q'] ?? '' );
 
-$dashboard_url = admin_url( 'admin.php?page=e3-analytics-dashboard&period=' . rawurlencode( $period_key ) );
-$dropout_url   = admin_url( 'admin.php?page=e3-analytics-dropout-progress&period=' . rawurlencode( $period_key ) );
-$country_url   = admin_url( 'admin.php?page=e3-analytics-country-analysis&period=' . rawurlencode( $period_key ) );
+/*
+ * Estado que se arrastra entre pestañas y a los export. Antes las URLs de
+ * navegación eran concatenación cruda con solo el período, así que cambiar de
+ * pestaña perdía el curso, el rango y la búsqueda.
+ *
+ * El filtro es explícito: array_filter() sin callback descartaría un bucket '0'
+ * o una búsqueda literal de "0".
+ */
+$state = array_filter(
+  [
+    'period'    => $period_key,
+    'course_id' => $selected_course_id,
+    'bucket'    => $selected_bucket,
+    'q'         => $selected_q,
+  ],
+  static function ( $v ) { return $v !== null && $v !== ''; }
+);
+
+$nav_url = static function ( $page ) use ( $state ) {
+  return add_query_arg( array_merge( [ 'page' => $page ], $state ), admin_url( 'admin.php' ) );
+};
+
+$dashboard_url = $nav_url( 'e3-analytics-dashboard' );
+$dropout_url   = $nav_url( 'e3-analytics-dropout-progress' );
+$country_url   = $nav_url( 'e3-analytics-country-analysis' );
 
 $export_excel_base  = admin_url( 'admin-post.php' );
 $export_excel_nonce = wp_create_nonce( 'e3a_export_excel' );
-$export_excel_url   = function( $key, $extra = [] ) use ( $export_excel_base, $export_excel_nonce, $period_key, $selected_course_id, $selected_bucket, $selected_q ) {
+$export_excel_url   = function( $key, $extra = [] ) use ( $export_excel_base, $export_excel_nonce, $state ) {
   $params = array_merge(
     [
       'action'    => 'e3a_export_excel',
       'scope'     => 'dropout',
       'key'       => $key,
-      'period'    => $period_key,
-      'course_id' => $selected_course_id,
-      'bucket'    => $selected_bucket,
-      'q'         => $selected_q,
+      'course_id' => 0,
+      'bucket'    => '',
+      'q'         => '',
       '_wpnonce'  => $export_excel_nonce,
     ],
+    $state,
     is_array( $extra ) ? $extra : []
   );
 
@@ -68,14 +77,13 @@ $export_excel_url   = function( $key, $extra = [] ) use ( $export_excel_base, $e
 $export_url = '';
 if ( $selected_course_id > 0 ) {
   $export_url = add_query_arg(
-    [
-      'action'    => 'e3a_export_dropout_users',
-      'period'    => $period_key,
-      'course_id' => $selected_course_id,
-      'bucket'    => $selected_bucket,
-      'q'         => $selected_q,
-      '_wpnonce'  => wp_create_nonce( 'e3a_export_dropout_users' ),
-    ],
+    array_merge(
+      [
+        'action'    => 'e3a_export_dropout_users',
+        '_wpnonce'  => wp_create_nonce( 'e3a_export_dropout_users' ),
+      ],
+      $state
+    ),
     admin_url( 'admin-post.php' )
   );
 }
@@ -83,6 +91,10 @@ if ( $selected_course_id > 0 ) {
 
 <div class="wrap e3-shell">
   <div class="e3-canvas">
+
+    <?php if ( $notice !== '' ) : ?>
+      <div class="notice notice-warning e3-notice-wp"><p><?php echo esc_html( $notice ); ?></p></div>
+    <?php endif; ?>
 
     <div class="e3-topbar">
       <div class="e3-topbar-left">
@@ -101,6 +113,7 @@ if ( $selected_course_id > 0 ) {
         <div class="e3-meta e3-meta--current">
           <div class="e3-meta-label"><?php echo esc_html( $is_all ? 'Histórico completo' : 'Período analizado' ); ?></div>
           <div class="e3-meta-value"><?php echo esc_html( $current_range ); ?></div>
+          <div class="e3-meta-note">El último día está en curso: sus datos son parciales.</div>
         </div>
         <div class="e3-meta e3-meta--compare">
           <div class="e3-meta-label">Total en abandono</div>
@@ -113,14 +126,7 @@ if ( $selected_course_id > 0 ) {
       <form method="get" class="e3-toolbar-form">
         <input type="hidden" name="page" value="e3-analytics-dropout-progress" />
 
-        <div class="e3-field">
-          <label class="e3-field-label" for="e3-period">Período</label>
-          <select id="e3-period" name="period" class="e3-select">
-<?php foreach ( \E3_Analytics\Support\DatePeriod::presets() as $preset_key => $preset_label ) : ?>
-            <option value="<?php echo esc_attr( $preset_key ); ?>" <?php selected( $period_key, $preset_key ); ?>><?php echo esc_html( $preset_label ); ?></option>
-<?php endforeach; ?>
-          </select>
-        </div>
+        <?php require E3A_PATH . 'admin/views/partials/period-selector.php'; ?>
 
         <button type="submit" class="button button-primary e3-btn">Actualizar</button>
       </form>

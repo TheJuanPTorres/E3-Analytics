@@ -230,9 +230,31 @@
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
+    document.addEventListener('DOMContentLoaded', () => { boot(); initCustomRange(); });
   } else {
     boot();
+    initCustomRange();
+  }
+
+  /**
+   * Rango personalizado: muestra u oculta los dos <input type="date">.
+   *
+   * Los inputs se renderizan SIEMPRE visibles desde PHP. Si este script no
+   * carga, quedan a la vista y todo sigue funcionando: el submit es el boton
+   * "Actualizar" del <form method="get">, no depende de ningun listener.
+   */
+  function initCustomRange() {
+    const select = document.querySelector('[data-e3-period]');
+    const fields = document.querySelectorAll('[data-e3-custom-range]');
+    if (!select || !fields.length) return;
+
+    const sync = () => {
+      const show = select.value === 'custom';
+      fields.forEach((el) => { el.hidden = !show; });
+    };
+
+    select.addEventListener('change', sync);
+    sync();
   }
 
   function initExportButtons() {

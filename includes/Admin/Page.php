@@ -26,6 +26,47 @@ final class Page {
         add_action( 'admin_post_e3a_save_settings', [ $this, 'save_settings' ] );
     }
 
+    /**
+     * Lee el período del request y lo devuelve como UN escalar.
+     *
+     * Es el ÚNICO lector de $_GET para el período en todo el plugin: DatePeriod
+     * dejó de tener fallback a la superglobal. Los 6 handlers que necesitan el
+     * período llaman acá.
+     *
+     * El formulario manda el rango personalizado en dos campos nativos,
+     * e3a_from y e3a_to, y este método los compone en la clave canónica
+     * 'YYYY-MM-DD..YYYY-MM-DD'. A partir de ahí el período viaja como un escalar
+     * 'period', igual que '30' o 'this_month': ni las URLs de navegación ni las
+     * de export llevan parámetros nuevos.
+     *
+     * OJO — 'custom' es un valor válido del <option> del selector y NO es un
+     * valor válido para DatePeriod. Este método lo intercepta y lo traduce al
+     * rango compuesto. NO agregar 'custom' al allowlist de DatePeriod "para que
+     * funcione": eso volvería representable el estado "custom sin fechas", que
+     * DatePeriod coercionaría al default en silencio. Si el selector dice
+     * "Rango personalizado" pero los inputs vienen vacíos, acá no se compone
+     * nada y se cae al default, que es el comportamiento correcto.
+     *
+     * @return string|null Null si el request no trae período.
+     */
+    private function read_period() {
+        $from = isset( $_GET['e3a_from'] ) ? sanitize_text_field( wp_unslash( $_GET['e3a_from'] ) ) : '';
+        $to   = isset( $_GET['e3a_to'] ) ? sanitize_text_field( wp_unslash( $_GET['e3a_to'] ) ) : '';
+
+        if ( '' !== $from && '' !== $to ) {
+            return $from . '..' . $to;
+        }
+
+        $period = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : '';
+
+        // 'custom' sin fechas: no es resoluble. Se deja caer al default.
+        if ( 'custom' === $period ) {
+            return null;
+        }
+
+        return '' !== $period ? $period : null;
+    }
+
     public function register_menu() {
         add_menu_page(
             'E3 Analytics',
@@ -137,7 +178,7 @@ final class Page {
             return;
         }
 
-        $period = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : null;
+        $period = $this->read_period();
 
         $service = new MetricsService();
         $data    = $service->get_dashboard_data( $period );
@@ -157,7 +198,7 @@ final class Page {
             wp_die( __( 'No tienes permisos suficientes para ver esta página.', 'e3-analytics' ) );
         }
 
-        $period    = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : null;
+        $period    = $this->read_period();
         $course_id = isset( $_GET['course_id'] ) ? (int) $_GET['course_id'] : 0;
         $bucket    = isset( $_GET['bucket'] ) ? sanitize_text_field( wp_unslash( $_GET['bucket'] ) ) : '';
         $q         = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : '';
@@ -181,7 +222,7 @@ final class Page {
             wp_die( __( 'No tienes permisos suficientes para ver esta página.', 'e3-analytics' ) );
         }
 
-        $period = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : null;
+        $period = $this->read_period();
 
         $service = new CountryAnalyticsService();
         $report  = $service->get_report( $period );
@@ -218,7 +259,7 @@ final class Page {
             wp_die( __( 'Parámetro de exportación no válido.', 'e3-analytics' ) );
         }
 
-        $period    = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : null;
+        $period    = $this->read_period();
         $course_id = isset( $_GET['course_id'] ) ? (int) $_GET['course_id'] : 0;
         $bucket    = isset( $_GET['bucket'] ) ? sanitize_text_field( wp_unslash( $_GET['bucket'] ) ) : '';
         $q         = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : '';
@@ -249,7 +290,7 @@ final class Page {
             wp_die( __( 'Nonce inválido. Recarga la página e intenta de nuevo.', 'e3-analytics' ) );
         }
 
-        $period = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : null;
+        $period = $this->read_period();
         $limit  = isset( $_GET['limit'] ) ? (int) $_GET['limit'] : 0;
         $include_meta = isset( $_GET['include_meta'] ) ? (int) $_GET['include_meta'] : 0;
 
@@ -276,7 +317,7 @@ final class Page {
             wp_die( __( 'Nonce inválido. Recarga la página e intenta de nuevo.', 'e3-analytics' ) );
         }
 
-        $period    = isset( $_GET['period'] ) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : null;
+        $period    = $this->read_period();
         $course_id = isset( $_GET['course_id'] ) ? (int) $_GET['course_id'] : 0;
         $bucket    = isset( $_GET['bucket'] ) ? sanitize_text_field( wp_unslash( $_GET['bucket'] ) ) : '';
         $q         = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : '';
