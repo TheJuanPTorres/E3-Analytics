@@ -55,6 +55,23 @@ final class Page {
             [ $this, 'render_country' ]
         );
 
+        /*
+         * @deprecated CANDADO DE LIMPIEZA — eliminar al cerrar B2.
+         *
+         * Este submenú se elimina EN EL MISMO COMMIT que borra el bloque
+         * "Avanzado — temporal" de admin/views/settings.php. Cuando se quite la
+         * sección de quizzes de retroalimentación, la página de Configuración
+         * queda solo con ese bloque temporal; al borrarlo también, queda vacía.
+         *
+         * Se eliminan juntos, en un solo commit:
+         *   - este add_submenu_page()
+         *   - Page::render_settings()
+         *   - Page::save_settings()
+         *   - el add_action( 'admin_post_e3a_save_settings' ) de Page::hooks()
+         *   - admin/views/settings.php
+         *
+         * Decisión tomada: mantener el submenú hasta entonces (opción 1).
+         */
         add_submenu_page(
             $this->slug_dashboard,
             'Configuración',
@@ -326,6 +343,13 @@ final class Page {
         exit;
     }
 
+    /**
+     * @deprecated CANDADO DE LIMPIEZA — eliminar al cerrar B2.
+     *
+     * Se elimina en el MISMO COMMIT que borra el bloque "Avanzado — temporal"
+     * de admin/views/settings.php, junto con el registro del submenú de
+     * Configuración (ver register_menu()) y save_settings().
+     */
     public function render_settings() {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( __( 'No tienes permisos suficientes para ver esta página.', 'e3-analytics' ) );
@@ -353,6 +377,14 @@ final class Page {
         require E3A_PATH . 'admin/views/settings.php';
     }
 
+    /**
+     * @deprecated CANDADO DE LIMPIEZA — eliminar al cerrar B2.
+     *
+     * Se elimina en el MISMO COMMIT que borra el bloque "Avanzado — temporal"
+     * de admin/views/settings.php, junto con el registro del submenú de
+     * Configuración (ver register_menu()) y render_settings(). Acordarse de
+     * quitar también el add_action( 'admin_post_e3a_save_settings' ) de hooks().
+     */
     public function save_settings() {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( __( 'No tienes permisos suficientes para realizar esta acción.', 'e3-analytics' ) );

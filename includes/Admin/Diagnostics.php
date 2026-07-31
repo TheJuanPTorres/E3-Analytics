@@ -657,6 +657,11 @@ final class Diagnostics {
 		printf( "    %-38s %s\n", 'delta', sprintf( '%+.1f pts', $activity_fixed - $activity_actual ) );
 
 		echo "\n  completacion  (regla nueva = marcado por Tutor O progreso == 100)\n";
+		echo "    [!] MEDICION DE UNA SOLA VEZ. Estas cifras solo tienen sentido MIENTRAS\n";
+		echo "        la regla vieja siga viva. Una vez eliminado TutorLms.php:47-108,\n";
+		echo "        is_effectively_completed() PASA A SER la regla nueva, este bloque\n";
+		echo "        compara la regla nueva contra si misma y el delta da cero para\n";
+		echo "        siempre. No se puede repetir despues: guarda esta salida.\n";
 		printf( "    %-38s %s\n", 'current_completed actual', self::num( $comp['actual'] ) );
 		printf( "    %-38s %s\n", 'current_completed nueva regla', self::num( $comp['new'] ) );
 		printf( "    %-38s %s\n", '  de los cuales: marcados por Tutor', self::num( $comp['tutor'] ) );
