@@ -25,13 +25,24 @@ final class TutorLms {
     }
 
     /**
-     * Versión enriquecida de is_course_completed() que tiene en cuenta los
-     * quizzes de retroalimentación configurados en E3 Analytics.
+     * Versión enriquecida de is_course_completed().
      *
      * Un alumno se considera completado si:
      *   a) Tutor LMS lo marca como completado formalmente, O
-     *   b) Tiene 100% de progreso Y todos los quizzes que bloquean la
-     *      completación están marcados como "retroalimentación".
+     *   b) Tiene 100% de progreso.
+     *
+     * El caso (b) existe porque Tutor deja de marcar el curso como completado
+     * cuando hay respuestas abiertas pendientes de revisión, aunque el alumno ya
+     * haya recorrido todo el contenido.
+     *
+     * Hasta la versión 1.2.9.1-b1 el caso (b) además exigía que todos los
+     * quizzes bloqueantes estuvieran declarados como "de retroalimentación" en
+     * una pantalla de configuración. Ese filtro se eliminó: la medición sobre
+     * 3.071 pares curso-usuario y 4 años de historia no encontró UNA SOLA
+     * inscripción que rechazara (period=30: 123=123, period=365: 628=628,
+     * period=all: 1178=1178). Los quizzes son parte del contenido del curso, así
+     * que llegar al 100% de progreso ya implicaba haberlos rendido: la condición
+     * era tautológica y solo costaba hasta 4 queries por par.
      */
     public function is_effectively_completed( $course_id, $user_id ) {
         $course_id = (int) $course_id;
@@ -40,72 +51,8 @@ final class TutorLms {
         // Señal formal de Tutor LMS.
         if ( $this->is_course_completed( $course_id, $user_id ) ) return true;
 
-        // Sin progreso completo no hay nada más que evaluar.
-        $progress = (float) $this->course_progress_percent( $course_id, $user_id );
-        if ( $progress < 100.0 ) return false;
-
-        // Progreso = 100% pero sin marca formal.
-        // Verificar si todos los quizzes bloqueantes son de retroalimentación.
-        $feedback_ids = \E3_Analytics\Settings::get_feedback_quiz_ids();
-        if ( empty( $feedback_ids ) ) return false;
-
-        global $wpdb;
-
-        // Obtener topics del curso.
-        $topic_ids = $wpdb->get_col(
-            $wpdb->prepare(
-                "SELECT ID FROM {$wpdb->posts}
-                 WHERE post_type   = 'topics'
-                   AND post_parent = %d
-                   AND post_status = 'publish'",
-                $course_id
-            )
-        );
-
-        if ( empty( $topic_ids ) ) return true; // sin topics → sin quizzes → puede completar
-
-        $in = implode( ',', array_fill( 0, count( $topic_ids ), '%d' ) );
-        $all_quiz_ids = array_map( 'intval', (array) $wpdb->get_col(
-            $wpdb->prepare(
-                "SELECT ID FROM {$wpdb->posts}
-                 WHERE post_type   = 'tutor_quiz'
-                   AND post_status = 'publish'
-                   AND post_parent IN ($in)",
-                $topic_ids
-            )
-        ) );
-
-        if ( empty( $all_quiz_ids ) ) return true; // sin quizzes → puede completar
-
-        // Verificar tabla de intentos de Tutor LMS.
-        $attempts_table = $wpdb->prefix . 'tutor_quiz_attempts';
-        if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $attempts_table ) ) !== $attempts_table ) {
-            return false; // tabla no existe → conservador
-        }
-
-        // Quizzes con al menos un intento calificado (earned_marks asignado = revisado).
-        $graded_ids = array_map( 'intval', (array) $wpdb->get_col(
-            $wpdb->prepare(
-                "SELECT DISTINCT quiz_id FROM {$attempts_table}
-                 WHERE course_id    = %d
-                   AND user_id      = %d
-                   AND earned_marks IS NOT NULL",
-                $course_id,
-                $user_id
-            )
-        ) );
-
-        // Quizzes del curso sin calificación asignada (pendientes de revisión).
-        $ungraded = array_diff( $all_quiz_ids, $graded_ids );
-
-        if ( empty( $ungraded ) ) return true; // todo calificado
-
-        // Todos los no-calificados deben estar en la lista de retroalimentación.
-        foreach ( $ungraded as $qid ) {
-            if ( ! in_array( $qid, $feedback_ids, true ) ) return false;
-        }
-
-        return true;
+        // 100% de progreso cuenta como completado, punto.
+        return ( (float) $this->course_progress_percent( $course_id, $user_id ) ) >= 100.0;
     }
 
     public function course_progress_percent($course_id, $user_id) {

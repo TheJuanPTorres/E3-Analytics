@@ -365,9 +365,6 @@ final class Page {
             $notice_type = $_GET['e3a_saved'] === '1' ? 'success' : 'error';
         }
 
-        $quizzes_by_course = Settings::get_quizzes_by_course();
-        $feedback_ids      = Settings::get_feedback_quiz_ids();
-
         // TEMPORAL etapa B1: bloque "Avanzado". Borrar las 4 líneas al cerrar B2.
         $date_mode      = Settings::get_date_mode();
         $date_mode_eff  = \E3_Analytics\Support\DatePeriod::resolve_mode();
@@ -396,20 +393,18 @@ final class Page {
         }
 
         /*
-         * La página tiene dos formularios distintos contra este mismo handler.
-         * Sin distinguir la sección, guardar el bloque "Avanzado" borraría la
-         * lista de quizzes de retroalimentación (llegaría sin feedback_quiz_ids
-         * y se guardaría un array vacío). Por defecto 'quizzes', que es el
-         * comportamiento histórico si el campo no viene.
+         * La ramificación por sección quedó de cuando la página tenía dos
+         * formularios. Hoy solo queda el de "Avanzado", que manda
+         * e3a_section=advanced explícito.
+         *
+         * El default es 'advanced' a propósito: si quedara en el valor histórico
+         * 'quizzes', un POST sin el campo no entraría a ninguna rama, no
+         * guardaría nada y aun así redirigiría con e3a_saved=1. Guardar en
+         * silencio sin guardar es el peor modo de fallar.
          */
         $section = isset( $_POST['e3a_section'] )
             ? sanitize_text_field( wp_unslash( $_POST['e3a_section'] ) )
-            : 'quizzes';
-
-        if ( 'quizzes' === $section ) {
-            $raw = isset( $_POST['feedback_quiz_ids'] ) ? (array) $_POST['feedback_quiz_ids'] : [];
-            Settings::save_feedback_quiz_ids( $raw );
-        }
+            : 'advanced';
 
         // TEMPORAL etapa B1: borrar este bloque al cerrar B2.
         if ( 'advanced' === $section ) {

@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**E3 Analytics Dashboard** is a WordPress plugin (v1.2.8.3) that provides a custom KPI dashboard for the Tutor LMS platform. It tracks registrations, enrollments, completion rates, dropout progress, retention (DAU/MAU), and geographic analytics. No build system or package manager is used — everything runs directly in WordPress.
+**E3 Analytics Dashboard** is a WordPress plugin (v1.2.9.2-b1) that provides a custom KPI dashboard for the Tutor LMS platform. It tracks registrations, enrollments, completion rates, dropout progress, retention (DAU/MAU), and geographic analytics. No build system or package manager is used — everything runs directly in WordPress.
 
-> **Last updated:** 2026-03-31. Reflects all changes made through the context-optimization + feedback-quiz + course-progress-columns sessions.
+> **Last updated:** 2026-07-30. Reflects B1 (date modes, UTC keys, diagnostics) and the removal of the feedback-quiz feature in 1.2.9.2-b1.
 
 ## Architecture
 
@@ -28,7 +28,7 @@ Entry point: `e3-analytics-dashboard/e3-analytics-dashboard.php`
 
 All pages require `manage_options` capability.
 
-The Settings page lets admins mark specific quizzes as "feedback/non-grading" so they are excluded from blocking course completion in analytics (see `is_effectively_completed()` below).
+The Settings page currently holds only the temporary B1 "Avanzado" block (date mode + diagnostics toggle). Both it and the page are removed when B2 closes.
 
 ### Data Flow
 
@@ -48,8 +48,8 @@ Chart data is PHP-encoded to JSON and injected as inline scripts via `wp_add_inl
 - **`includes/Admin/Page.php`** — menu registration, asset loading, view dispatch, export handlers, settings save handler
 - **`includes/Services/`** — KPI calculation logic (MetricsService, DropoutProgressService, CountryAnalyticsService, ExportService, CountryUsersExportService)
 - **`includes/Repositories/`** — raw database queries (UsersRepository, EnrollmentsRepository)
-- **`includes/Integrations/TutorLms.php`** — wraps Tutor LMS functions (completion status, progress %). Key method: `is_effectively_completed($course_id, $user_id)` — considers a course complete if Tutor marks it formally OR progress=100% with all blocking quizzes flagged as feedback-only in Settings.
-- **`includes/Settings.php`** — manages `e3a_feedback_quiz_ids` WP option. Methods: `get_feedback_quiz_ids()`, `save_feedback_quiz_ids()`, `is_feedback_quiz()`, `get_quizzes_by_course()`.
+- **`includes/Integrations/TutorLms.php`** — wraps Tutor LMS functions (completion status, progress %). Key method: `is_effectively_completed($course_id, $user_id)` — considers a course complete if Tutor marks it formally OR progress=100%.
+- **`includes/Settings.php`** — manages the two temporary B1 options. Methods: `get_date_mode()`, `save_date_mode()`, `is_diag_enabled()`, `save_diag_enabled()`.
 - **`includes/Support/`** — utilities: DatePeriod (period resolution), Math (growth %), Xlsx (ZIP-based Excel generator), CountryHelper (trait: country normalization + ISO2→name), BucketHelper (trait: progress % → bucket key)
 
 ### Period System
@@ -68,7 +68,9 @@ All queries use `$wpdb->prepare()` with `%s`/`%d` placeholders. User input sanit
 
 **Never use `tutor_utils()->is_completed_course()` directly in KPI logic.** Always call `TutorLms::is_effectively_completed($course_id, $user_id)` instead. Reason: Tutor LMS marks courses as incomplete when open-ended quiz answers are pending review, even if progress is 100%. `is_effectively_completed()` works around this by treating a course as complete if:
 1. Tutor's own flag is true, OR
-2. Progress is 100% AND every quiz with `earned_marks IS NULL` in `tutor_quiz_attempts` is listed in the feedback-quiz settings (`e3a_feedback_quiz_ids` option).
+2. Progress is 100%.
+
+The feedback-quiz filter that used to gate rule 2 was removed in 1.2.9.2-b1: measured against 3,071 course-user pairs over 4 years of production data it rejected **zero** enrollments (30d 123=123, 365d 628=628, all-time 1178=1178). Quizzes are course content, so reaching 100% progress already implied having taken them. The `e3a_feedback_quiz_ids` option row was deliberately left in the database so the code can be reverted; reverting makes it take effect again immediately.
 
 ### Export Actions
 
@@ -76,7 +78,7 @@ POST to `admin-post.php` with these actions:
 - `e3a_export_excel` → `Page::export_excel()`
 - `e3a_export_dropout_users` → `Page::export_dropout_users()`
 - `e3a_export_country_users` → `Page::export_country_users()`
-- `e3a_save_settings` → `Page::save_settings()` (saves feedback quiz IDs to WP options)
+- `e3a_save_settings` → `Page::save_settings()` (saves the temporary B1 options)
 
 Exports produce XLSX (via `Support/Xlsx.php` using `ZipArchive`) or CSV (native `fputcsv`). Controlled by filters `e3a_export_excel`, `e3a_export_country_users`.
 
@@ -103,7 +105,9 @@ The **country users export** (`CountryUsersExportService`) produces two sheets:
 
 ### WP Options
 
-- `e3a_feedback_quiz_ids` — serialized `int[]` of quiz post IDs considered "feedback-only" (non-grading). Managed via the Settings page.
+- `e3a_date_mode` — temporary B1 date-resolution mode (`legacy` | `calendar` | `calendar_utc`).
+- `e3a_diag_enabled` — temporary B1 flag enabling the diagnostics page.
+- `e3a_feedback_quiz_ids` — **orphaned**. No longer read or written since 1.2.9.2-b1; left in place to allow reverting. Clean up in the pending `uninstall.php`.
 
 ## Key Files
 
@@ -112,7 +116,7 @@ e3-analytics-dashboard/
 ├── e3-analytics-dashboard.php              Plugin entry point & constants
 ├── includes/
 │   ├── Plugin.php                          Singleton bootstrap, requires all files
-│   ├── Settings.php                        Feedback-quiz option (e3a_feedback_quiz_ids)
+│   ├── Settings.php                        Temporary B1 options (date mode, diagnostics)
 │   ├── Admin/Page.php                      Menu, assets, routing, export + settings handlers
 │   ├── Services/MetricsService.php         Main dashboard KPI logic
 │   ├── Services/DropoutProgressService.php Dropout + progress bucket report
@@ -123,7 +127,7 @@ e3-analytics-dashboard/
 │   ├── Repositories/UsersRepository.php
 │   ├── Integrations/TutorLms.php           Tutor LMS wrapper — use is_effectively_completed()
 │   └── Support/
-│       ├── DatePeriod.php                  Period resolution & date math
+│       ├── DatePeriod.php                  Period resolution & date math (3 modes)
 │       ├── Math.php                        Growth % helper
 │       ├── Xlsx.php                        ZIP-based XLSX generator
 │       ├── CountryHelper.php               Trait: normalize_country_label(), iso2_to_name()
@@ -136,7 +140,7 @@ e3-analytics-dashboard/
 │       ├── dashboard.php
 │       ├── dropout-progress.php
 │       ├── country-analysis.php
-│       └── settings.php                    Feedback-quiz admin UI
+│       └── settings.php                    Temporary B1 "Avanzado" block only
 ```
 
 ## Development Notes

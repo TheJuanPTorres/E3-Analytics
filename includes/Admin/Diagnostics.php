@@ -4,8 +4,6 @@ namespace E3_Analytics\Admin;
 use E3_Analytics\Settings;
 use E3_Analytics\Support\DatePeriod;
 use E3_Analytics\Services\MetricsService;
-use E3_Analytics\Repositories\EnrollmentsRepository;
-use E3_Analytics\Integrations\TutorLms;
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
@@ -207,22 +205,6 @@ final class Diagnostics {
 		self::kv( 'modo de fecha activo', DatePeriod::resolve_mode() );
 		self::kv( 'post type de inscripcion', (string) $post_type );
 
-		/*
-		 * Este numero decide el costo de period=all. is_effectively_completed()
-		 * (TutorLms.php:49-50) hace return ANTES de tocar la base si la lista de
-		 * quizzes de retroalimentacion esta vacia. Con 0 configurados, las 3
-		 * queries por par curso-usuario (topics, quizzes, SHOW TABLES) NUNCA se
-		 * ejecutan y el costo por inscripcion baja muchisimo.
-		 */
-		$feedback_ids = \E3_Analytics\Settings::get_feedback_quiz_ids();
-		self::kv( 'quizzes de retroalimentacion', self::num( count( $feedback_ids ) ) );
-		if ( empty( $feedback_ids ) ) {
-			echo "   0 configurados => is_effectively_completed() retorna en TutorLms.php:50\n";
-			echo "   sin tocar la base. El SHOW TABLES de :82 no se ejecuta nunca.\n";
-		} else {
-			echo "   >0 configurados => por cada par curso-usuario con 100% de progreso que\n";
-			echo "   Tutor NO marca como completado, se ejecutan 3 queries extra (:55, :68, :82).\n";
-		}
 
 		self::h( 'USUARIOS' );
 		$users = $wpdb->get_row(
@@ -643,9 +625,6 @@ final class Diagnostics {
 			? round( ( $overlap / $new_users ) * 100, 1 )
 			: 0.0;
 
-		// Regla de completacion: vigente vs nueva, en UNA sola pasada.
-		$comp = self::completion_rules( $dates, $kpis );
-
 		self::h( 'HIPOTETICO — ' . strtoupper( $mode ) . ' (medicion, NO aplicado)' );
 
 		echo "  activity_rate\n";
@@ -656,66 +635,26 @@ final class Diagnostics {
 		printf( "    %-38s %s\n", 'activity_rate_corregido', self::scalar( $activity_fixed ) . '%' );
 		printf( "    %-38s %s\n", 'delta', sprintf( '%+.1f pts', $activity_fixed - $activity_actual ) );
 
-		echo "\n  completacion  (regla nueva = marcado por Tutor O progreso == 100)\n";
-		echo "    [!] MEDICION DE UNA SOLA VEZ. Estas cifras solo tienen sentido MIENTRAS\n";
-		echo "        la regla vieja siga viva. Una vez eliminado TutorLms.php:47-108,\n";
-		echo "        is_effectively_completed() PASA A SER la regla nueva, este bloque\n";
-		echo "        compara la regla nueva contra si misma y el delta da cero para\n";
-		echo "        siempre. No se puede repetir despues: guarda esta salida.\n";
-		printf( "    %-38s %s\n", 'current_completed actual', self::num( $comp['actual'] ) );
-		printf( "    %-38s %s\n", 'current_completed nueva regla', self::num( $comp['new'] ) );
-		printf( "    %-38s %s\n", '  de los cuales: marcados por Tutor', self::num( $comp['tutor'] ) );
-		printf( "    %-38s %s\n", '  de los cuales: solo por 100%', self::num( $comp['only100'] ) );
-		printf( "    %-38s %s\n", 'denominador (current_enrollments)', self::num( $comp['denominator'] ) );
-		printf( "    %-38s %s\n", 'completion_rate actual', self::scalar( $comp['rate_actual'] ) . '%' );
-		printf( "    %-38s %s\n", 'completion_rate nueva regla', self::scalar( $comp['rate_new'] ) . '%' );
-		printf( "    %-38s %s\n", 'dropout_rate actual', self::scalar( $comp['dropout_actual'] ) . '%' );
-		printf( "    %-38s %s\n", 'dropout_rate nueva regla', self::scalar( $comp['dropout_new'] ) . '%' );
+		// --- Impacto en el indice de salud. ----------------------------------
+		$completion = (float) ( $kpis['completion_rate'] ?? 0 );
 
-		if ( $comp['actual'] !== (int) ( $kpis['current_completed'] ?? -1 ) ) {
-			printf(
-				"    [!] current_completed recalculado (%d) != el del dashboard (%d).\n",
-				$comp['actual'],
-				(int) ( $kpis['current_completed'] ?? 0 )
-			);
-			echo "        Si difieren, la medicion de abajo no es comparable: avisar.\n";
-		}
-
-		// --- Los cuatro escenarios del indice de salud. ----------------------
-		$a = self::health_score( $activity_actual, $comp['rate_actual'], $ret_30 );
-		$b = self::health_score( $activity_fixed, $comp['rate_actual'], $ret_30 );
-		$c = self::health_score( $activity_actual, $comp['rate_new'], $ret_30 );
-		$d = self::health_score( $activity_fixed, $comp['rate_new'], $ret_30 );
+		$a = self::health_score( $activity_actual, $completion, $ret_30 );
+		$b = self::health_score( $activity_fixed, $completion, $ret_30 );
 
 		echo "\n  indice de salud  (activity*0.30 + completion*0.40 + retencion30*0.30)\n";
+		printf( "    %-38s %s\n", 'completion_rate usado (constante)', self::scalar( $completion ) . '%' );
 		printf( "    %-38s %s\n", 'retencion 30d usada (constante)', self::scalar( $ret_30 ) . '%' );
-		printf( "    %-38s %-8s %-8s %s\n", '', 'pre', 'post', 'delta vs A' );
-		printf( "    %-38s %-8d %-8d %s\n", 'A) actual', $a['pre'], $a['post'], '-' );
-		printf( "    %-38s %-8d %-8d %+d\n", 'B) solo activity corregido', $b['pre'], $b['post'], $b['post'] - $a['post'] );
-		printf( "    %-38s %-8d %-8d %+d\n", 'C) solo completacion nueva regla', $c['pre'], $c['post'], $c['post'] - $a['post'] );
-		printf( "    %-38s %-8d %-8d %+d\n", 'D) ambos cambios juntos', $d['pre'], $d['post'], $d['post'] - $a['post'] );
+		printf( "    %-38s %-8s %-8s %s\n", '', 'pre', 'post', 'delta' );
+		printf( "    %-38s %-8d %-8d %s\n", 'actual', $a['pre'], $a['post'], '-' );
+		printf( "    %-38s %-8d %-8d %+d\n", 'con activity corregido', $b['pre'], $b['post'], $b['post'] - $a['post'] );
 
 		if ( $a['pre'] > 100 ) {
-			printf( "\n    El clamp tapaba %d puntos en A: sin el daria %d.\n", $a['pre'] - 100, $a['pre'] );
+			printf( "\n    El clamp tapaba %d puntos: sin el, el indice actual daria %d.\n", $a['pre'] - 100, $a['pre'] );
 		}
 		if ( $activity_actual > 100 ) {
 			echo "    activity_rate actual supera 100%: numerador y denominador son\n";
 			echo "    poblaciones distintas (ver MetricsService.php:144-147).\n";
 		}
-
-		// --- Costo de cada regla. --------------------------------------------
-		echo "\n  costo de evaluar la completacion\n";
-		printf( "    %-38s %s\n", 'queries con la regla nueva', self::num( $comp['q_new'] ) );
-		printf( "    %-38s %s\n", 'queries con la regla actual', self::num( $comp['q_actual'] ) );
-		printf( "    %-38s %s\n", 'diferencia (lo que se ahorraria)', self::num( $comp['q_actual'] - $comp['q_new'] ) );
-		printf( "    %-38s %s\n", 'pares curso-usuario evaluados', self::num( $comp['pairs'] ) );
-
-		echo "\n    OJO con estos numeros: esta pasada corre DESPUES de que\n";
-		echo "    MetricsService ya recorrio las mismas inscripciones en este request,\n";
-		echo "    asi que el object cache esta caliente y 'queries con la regla nueva'\n";
-		echo "    sale artificialmente bajo. La cifra confiable es la DIFERENCIA: son\n";
-		echo "    las queries de TutorLms.php:55, :68, :82 y :87, que van directo a\n";
-		echo "    \$wpdb y no las cachea nadie.\n";
 
 		echo "\n";
 	}
@@ -733,118 +672,6 @@ final class Diagnostics {
 		return array(
 			'pre'  => $pre,
 			'post' => max( 0, min( 100, $pre ) ),
-		);
-	}
-
-	/**
-	 * Evalua las dos reglas de completacion en UNA sola pasada.
-	 *
-	 * Regla vigente : TutorLms::is_effectively_completed() — marca de Tutor, o
-	 *                 100% de progreso con todos los quizzes bloqueantes
-	 *                 declarados como retroalimentacion.
-	 * Regla nueva   : marca de Tutor O progreso == 100, sin mas.
-	 *
-	 * Las dos se derivan de las mismas dos primitivas (is_course_completed y
-	 * course_progress_percent), asi que no hace falta un segundo barrido: se
-	 * calculan juntas y se memoiza por par curso-usuario, igual que hace
-	 * MetricsService.php:85-86.
-	 *
-	 * El conteo es por FILA de inscripcion, no por par, para que el denominador
-	 * sea el mismo current_enrollments que usa MetricsService.php:137-140.
-	 *
-	 * @param array $dates
-	 * @param array $kpis
-	 * @return array
-	 */
-	private static function completion_rules( array $dates, array $kpis ) {
-		global $wpdb;
-
-		$repo  = new EnrollmentsRepository();
-		$tutor = new TutorLms();
-
-		$rows = $repo->rows_between(
-			(string) ( $dates['current_start'] ?? '' ),
-			(string) ( $dates['current_end'] ?? '' )
-		);
-
-		$cache      = array();
-		$rows_total = 0;
-		$c_actual   = 0;
-		$c_new      = 0;
-		$c_tutor    = 0;
-		$c_only100  = 0;
-		$q_new      = 0;
-		$q_extra    = 0;
-
-		foreach ( $rows as $row ) {
-			$cid = (int) ( $row['course_id'] ?? 0 );
-			$uid = (int) ( $row['user_id'] ?? 0 );
-			if ( $cid <= 0 || $uid <= 0 ) {
-				continue;
-			}
-
-			$rows_total++;
-			$key = $cid . '|' . $uid;
-
-			if ( ! isset( $cache[ $key ] ) ) {
-				$q0 = (int) $wpdb->num_queries;
-
-				// Primitivas: son TODO lo que necesita la regla nueva.
-				$flag     = (bool) $tutor->is_course_completed( $cid, $uid );
-				$progress = (float) $tutor->course_progress_percent( $cid, $uid );
-
-				$q1      = (int) $wpdb->num_queries;
-				$q_new  += ( $q1 - $q0 );
-
-				// Regla vigente: reusa las primitivas (ya calientes) y suma las
-				// queries propias del filtro de quizzes.
-				$effective = (bool) $tutor->is_effectively_completed( $cid, $uid );
-
-				$q_extra += ( (int) $wpdb->num_queries - $q1 );
-
-				$cache[ $key ] = array(
-					'flag'      => $flag,
-					'progress'  => $progress,
-					'effective' => $effective,
-					'newrule'   => ( $flag || $progress >= 100.0 ),
-				);
-			}
-
-			$p = $cache[ $key ];
-
-			if ( $p['effective'] ) {
-				$c_actual++;
-			}
-			if ( $p['newrule'] ) {
-				$c_new++;
-			}
-			if ( $p['flag'] ) {
-				$c_tutor++;
-			} elseif ( $p['progress'] >= 100.0 ) {
-				$c_only100++;
-			}
-		}
-
-		// Denominador de MetricsService: count($current_rows), sin filtrar.
-		$denominator = (int) ( $kpis['current_enrollments'] ?? $rows_total );
-
-		$rate_actual = $denominator > 0 ? round( ( $c_actual / $denominator ) * 100, 1 ) : 0.0;
-		$rate_new    = $denominator > 0 ? round( ( $c_new / $denominator ) * 100, 1 ) : 0.0;
-
-		return array(
-			'actual'         => $c_actual,
-			'new'            => $c_new,
-			'tutor'          => $c_tutor,
-			'only100'        => $c_only100,
-			'denominator'    => $denominator,
-			'rows_total'     => $rows_total,
-			'pairs'          => count( $cache ),
-			'rate_actual'    => $rate_actual,
-			'rate_new'       => $rate_new,
-			'dropout_actual' => max( 0, 100 - $rate_actual ),
-			'dropout_new'    => max( 0, 100 - $rate_new ),
-			'q_new'          => $q_new,
-			'q_actual'       => $q_new + $q_extra,
 		);
 	}
 

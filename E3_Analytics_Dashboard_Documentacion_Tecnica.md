@@ -1,7 +1,7 @@
 # E3 Analytics Dashboard
 ## Documentación Técnica — Entrega al Cliente
 
-**Versión del plugin:** 1.2.8.5
+**Versión del plugin:** 1.2.9.2-b1
 **Plataforma:** WordPress + Tutor LMS
 **Autor:** Juan Pablo Torres
 **Fecha del documento:** Abril 2026
@@ -53,7 +53,7 @@ El sistema está compuesto por cuatro páginas de administración accesibles des
 | **Dashboard** | Métricas generales del período: registros, inscripciones, finalización, retención y actividad |
 | **Avance en abandono** | Estudiantes que no completaron sus cursos, clasificados por rango de progreso |
 | **Análisis por país** | Distribución geográfica de registros, inscripciones y completaciones |
-| **Configuración** | Gestión de quizzes de retroalimentación (excluidos del bloqueo de completación) |
+| **Configuración** | Controles temporales de la etapa B1: modo de fecha y activador del diagnóstico |
 
 Cada módulo dispone de un **selector de período** (7, 30, 90 o 365 días, o histórico completo) y la mayoría permite exportar los datos directamente desde la interfaz.
 
@@ -194,11 +194,14 @@ Disponible mediante el botón **"Descargar usuarios (Excel)"**. Genera un archiv
 
 ### 3.4 Configuración
 
-Permite al administrador marcar quizzes específicos como **"de retroalimentación"** (no calificables). Estos quizzes son excluidos del criterio de bloqueo de completación de cursos.
+Hasta la versión 1.2.9.1-b1 esta página gestionaba los **quizzes de retroalimentación**. Esa funcionalidad se eliminó (ver sección 7): la regla de completación actual es que un curso al 100% de progreso cuenta como completado.
 
-Esto resuelve una limitación nativa de Tutor LMS que marca un curso como incompleto cuando existen respuestas abiertas de quizzes pendientes de revisión manual, incluso si el estudiante ha avanzado el 100% del contenido.
+Hoy la página contiene únicamente el bloque **"Avanzado — temporal"** de la etapa B1, con dos controles de transición:
 
-Los cambios se guardan en la opción de WordPress `e3a_feedback_quiz_ids` (array de IDs de quizzes).
+- **Modo de resolución de fechas** — `legacy` (ventanas rodantes ancladas a la hora actual, comportamiento histórico), `calendar` (días completos en hora local) o `calendar_utc` (días completos con los límites convertidos a UTC para `wp_users.user_registered`).
+- **Página de diagnóstico** — habilita la herramienta de relevamiento y comparación.
+
+Ambos controles, la página y su entrada de menú se eliminan al cerrar la etapa B2.
 
 ---
 
@@ -736,9 +739,7 @@ El plugin consulta directamente las tablas de WordPress. No requiere tablas prop
 | `wp_users` | Registros de usuarios (fecha de registro) |
 | `wp_usermeta` | País (`country_lms`), logins de Tutor LMS (`tutor_login_*`) |
 | `wp_posts` | Inscripciones (`post_type = tutor_enrolled`, `post_parent = course_id`, `post_author = user_id`) |
-| `wp_posts` (cursos/topics/quizzes) | Estructura del curso para validación de completación |
-| `wp_tutor_quiz_attempts` | Intentos de quizzes para validar calificaciones pendientes |
-| `wp_options` | Configuración del plugin (`e3a_feedback_quiz_ids`) |
+| `wp_options` | Configuración del plugin (`e3a_date_mode`, `e3a_diag_enabled`) |
 
 ### Estados de inscripción considerados
 
@@ -761,18 +762,29 @@ El plugin implementa el método `is_effectively_completed($course_id, $user_id)`
    → NO: continuar.
 
 2. ¿El estudiante tiene 100% de progreso?
-   → NO: considerar NO completado.
-   → SÍ: continuar.
-
-3. ¿Todos los quizzes sin calificación asignada (earned_marks IS NULL)
-   están marcados como "retroalimentación" en la Configuración del plugin?
    → SÍ: considerar completado.
    → NO: considerar NO completado.
 ```
 
 Este método se utiliza de manera consistente en todos los módulos del plugin: dashboard, abandono y análisis por país.
 
-**Importante:** La lista de quizzes de retroalimentación se gestiona desde la página de **Configuración** del plugin. Si no se configura ningún quiz como retroalimentación, el sistema aplica únicamente el criterio formal de Tutor LMS.
+### Historial: el filtro de quizzes de retroalimentación (eliminado en 1.2.9.2-b1)
+
+Hasta la versión 1.2.9.1-b1, el paso 2 exigía además una tercera condición: que todos los quizzes sin calificación asignada (`earned_marks IS NULL`) estuvieran marcados como "de retroalimentación" en una pantalla de Configuración, cuya lista se guardaba en la opción `e3a_feedback_quiz_ids`.
+
+Ese filtro se eliminó porque **era tautológico**. La medición sobre datos reales de producción, con 3.071 pares curso-usuario y 4 años de historia, no encontró **una sola** inscripción que el filtro rechazara:
+
+| Período | Regla con filtro | Regla sin filtro | Diferencia |
+|---------|-----------------|------------------|------------|
+| 30 días | 123 | 123 | **0** |
+| 365 días | 628 | 628 | **0** |
+| Histórico | 1.178 | 1.178 | **0** |
+
+El promedio de 3,55 queries por par (sobre un máximo de 4) mostró que los pares llegaban hasta la consulta de intentos y la encontraban satisfecha: los quizzes son parte del contenido del curso, de modo que alcanzar el 100% de progreso ya implicaba haberlos rendido.
+
+La eliminación no movió ningún KPI y quitó hasta 4 consultas SQL por par curso-usuario.
+
+**Nota para quien revierta el código:** la opción `e3a_feedback_quiz_ids` **no se borró** de la base de datos. Si se restaura el código anterior, la configuración previa vuelve a tener efecto de inmediato y las cifras de completación pueden cambiar sin aviso.
 
 ---
 
@@ -839,7 +851,7 @@ e3-analytics-dashboard/
 ├── e3-analytics-dashboard.php          Punto de entrada, constantes
 ├── includes/
 │   ├── Plugin.php                      Singleton bootstrap
-│   ├── Settings.php                    Opción e3a_feedback_quiz_ids
+│   ├── Settings.php                    Opciones e3a_date_mode / e3a_diag_enabled
 │   ├── Admin/Page.php                  Menús, assets, enrutamiento, handlers
 │   ├── Services/
 │   │   ├── MetricsService.php          Lógica de KPIs del dashboard
@@ -917,7 +929,6 @@ Solicitud HTTP (GET con ?page= y ?period=)
 
 ### Consultas SQL
 - 100% de las consultas usan `$wpdb->prepare()` con placeholders; no hay interpolación directa de variables en SQL
-- La tabla de intentos de quizzes se verifica que exista antes de consultarla
 
 ### Salida HTML
 - Todas las salidas en vistas usan `esc_html()`, `esc_attr()`, `esc_url()` según el contexto
@@ -951,8 +962,6 @@ No requiere:
 
 ### Primer uso recomendado
 
-1. Ingresar a **E3 Analytics → Configuración** y revisar los quizzes de la plataforma
-2. Marcar como "retroalimentación" aquellos quizzes que no deben bloquear la completación de cursos
 3. Guardar y navegar al **Dashboard** seleccionando el período deseado
 
 ---
@@ -992,7 +1001,6 @@ No requiere:
 | KPI-P09 | **Completados por país** | Inscripciones del período marcadas como completadas, por país |
 | KPI-P10 | **% Compleción por país** | `(Completados del país / Inscripciones del país) × 100` |
 | KPI-P11 | **Recurrentes por país** | Usuarios con historial previo que se inscriben a un curso nuevo en el período, por país |
-| — | **Quiz de retroalimentación** | Quiz marcado en Configuración como no calificable; no bloquea la completación aunque no tenga calificación asignada |
 | — | **Período anterior** | Ventana de tiempo inmediatamente anterior al período seleccionado, de igual duración |
 | — | **Histórico completo** | Desde la primera inscripción registrada en la plataforma hasta el momento actual |
 

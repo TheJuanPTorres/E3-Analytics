@@ -247,10 +247,16 @@ final class CountryAnalyticsService {
         /*
          * TTL de 60 s. Hasta ahora el caché nunca acertaba porque current_end
          * llevaba segundos y la clave cambiaba a cada request. En modo calendario
-         * la clave se estabiliza y el caché empieza a funcionar de verdad, y con
-         * él aparece el problema de que guardar la configuración de quizzes de
-         * retroalimentación no invalida nada. Con 60 s la exposición queda acotada
-         * a un minuto. El salt de versión de opciones es otra tanda.
+         * la clave se estabiliza y el caché empieza a funcionar de verdad.
+         *
+         * Hoy ninguna opción del plugin altera el cálculo de las métricas, así
+         * que no hay nada que invalidar: el caso que preocupaba —guardar la
+         * configuración de quizzes de retroalimentación y seguir viendo números
+         * viejos— desapareció con esa funcionalidad. Pero el MECANISMO de
+         * invalidación sigue sin existir: si mañana se agrega cualquier opción
+         * que influya en los números, el problema vuelve. Con 60 s la exposición
+         * queda acotada a un minuto. El salt de versión de opciones en la clave
+         * sigue pendiente.
          */
         if ( ! $bypass_cache ) {
             set_transient( $cache_key, $out, 60 );
