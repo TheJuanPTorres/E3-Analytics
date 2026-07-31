@@ -116,11 +116,9 @@ if ( $selected_course_id > 0 ) {
         <div class="e3-field">
           <label class="e3-field-label" for="e3-period">Período</label>
           <select id="e3-period" name="period" class="e3-select">
-            <option value="7"   <?php selected( $period_key, '7' ); ?>>Últimos 7 días</option>
-            <option value="30"  <?php selected( $period_key, '30' ); ?>>Últimos 30 días</option>
-            <option value="90"  <?php selected( $period_key, '90' ); ?>>Últimos 90 días</option>
-            <option value="365" <?php selected( $period_key, '365' ); ?>>Últimos 12 meses</option>
-            <option value="all" <?php selected( $period_key, 'all' ); ?>>Histórico completo</option>
+<?php foreach ( \E3_Analytics\Support\DatePeriod::presets() as $preset_key => $preset_label ) : ?>
+            <option value="<?php echo esc_attr( $preset_key ); ?>" <?php selected( $period_key, $preset_key ); ?>><?php echo esc_html( $preset_label ); ?></option>
+<?php endforeach; ?>
           </select>
         </div>
 

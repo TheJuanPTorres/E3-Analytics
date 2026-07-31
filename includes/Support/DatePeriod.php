@@ -41,6 +41,25 @@ final class DatePeriod {
 	const DEFAULT_MAX_CUSTOM_DAYS = 730;
 
 	/**
+	 * Presets que se ofrecen en el selector de período de las 3 vistas.
+	 *
+	 * Fuente única: hasta ahora las mismas 5 opciones estaban escritas a mano,
+	 * en HTML, en admin/views/dashboard.php, dropout-progress.php y
+	 * country-analysis.php. Agregar un preset obligaba a editar tres archivos.
+	 *
+	 * @return array<string,string> key => etiqueta
+	 */
+	public static function presets() {
+		return array(
+			'7'   => __( 'Últimos 7 días', 'e3-analytics' ),
+			'30'  => __( 'Últimos 30 días', 'e3-analytics' ),
+			'90'  => __( 'Últimos 90 días', 'e3-analytics' ),
+			'365' => __( 'Últimos 12 meses', 'e3-analytics' ),
+			'all' => __( 'Histórico completo', 'e3-analytics' ),
+		);
+	}
+
+	/**
 	 * Modos válidos.
 	 *
 	 * @return string[]
