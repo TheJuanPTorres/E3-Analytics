@@ -591,20 +591,26 @@ final class Diagnostics {
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Calcula activity_rate corregido y el impacto en el indice de salud.
+	 * Calcula activity_rate por la via correcta y lo compara con el que devuelve
+	 * el dashboard.
 	 *
-	 * NADA de esto se aplica al dashboard: es solo medicion para decidir en B2.
+	 * ESTADO: el fix ya se aplico en la version 1.2.9.3-b2. A partir de ahi
+	 * MetricsService usa el mismo criterio, asi que el delta de este bloque
+	 * DEBE dar 0.0 pts. Eso es precisamente lo que lo vuelve util ahora: es la
+	 * verificacion post-deploy de que el fix hace lo que la medicion predecia.
+	 * Un delta distinto de cero es un defecto.
 	 *
-	 * activity_rate de hoy (MetricsService.php:144-147) es
-	 *     students_with_enrollments / current_new_users * 100
-	 * y mezcla dos poblaciones: el numerador cuenta CUALQUIER usuario con una
-	 * inscripcion en la ventana (incluidos los registrados hace años), y el
-	 * denominador solo los registrados en la ventana. Por eso puede pasar de 100.
+	 * Historia: hasta 1.2.9.2-b1 el numerador era students_with_enrollments, que
+	 * cuenta a CUALQUIER usuario con una inscripcion en la ventana, incluidos los
+	 * registrados años atras, mientras el denominador solo contaba los
+	 * registrados en la ventana. Dos poblaciones que ni se contenian, y el
+	 * cociente pasaba de 100 de forma rutinaria (171,0% en period=30).
 	 *
-	 * La version corregida implementa lo que la propia descripcion de la tarjeta
-	 * ya promete (admin/views/dashboard.php:325): usuarios que cumplen LAS DOS
-	 * condiciones a la vez. Queda acotada a 0-100 por construccion, porque el
-	 * numerador es un subconjunto del denominador.
+	 * La query de registered_and_enrolled() se mantiene DUPLICADA a proposito:
+	 * es una implementacion independiente de la de
+	 * UsersRepository::count_registered_and_enrolled_between(). Si este bloque
+	 * llamara al repositorio, el delta daria cero por construccion y no
+	 * verificaria nada. Se borra en B4 junto con toda la herramienta.
 	 *
 	 * @param string $mode
 	 * @param array  $data  Retorno de MetricsService::get_dashboard_data().
@@ -627,13 +633,22 @@ final class Diagnostics {
 
 		self::h( 'HIPOTETICO — ' . strtoupper( $mode ) . ' (medicion, NO aplicado)' );
 
-		echo "  activity_rate\n";
-		printf( "    %-38s %s\n", 'numerador actual (con inscripcion)', self::num( (int) ( $kpis['active_users'] ?? 0 ) ) );
-		printf( "    %-38s %s\n", 'numerador corregido (ambas cosas)', self::num( $overlap ) );
+		echo "  activity_rate  (verificacion del fix de 1.2.9.3-b2)\n";
+		printf( "    %-38s %s\n", 'active_users (KPI aparte, NO es esto)', self::num( (int) ( $kpis['active_users'] ?? 0 ) ) );
+		printf( "    %-38s %s\n", 'numerador correcto (ambas cosas)', self::num( $overlap ) );
 		printf( "    %-38s %s\n", 'denominador (current_new_users)', self::num( $new_users ) );
-		printf( "    %-38s %s\n", 'activity_rate_actual', self::scalar( $activity_actual ) . '%' );
-		printf( "    %-38s %s\n", 'activity_rate_corregido', self::scalar( $activity_fixed ) . '%' );
-		printf( "    %-38s %s\n", 'delta', sprintf( '%+.1f pts', $activity_fixed - $activity_actual ) );
+		printf( "    %-38s %s\n", 'activity_rate del dashboard', self::scalar( $activity_actual ) . '%' );
+		printf( "    %-38s %s\n", 'activity_rate recalculado aca', self::scalar( $activity_fixed ) . '%' );
+
+		$delta = $activity_fixed - $activity_actual;
+		printf( "    %-38s %s\n", 'delta', sprintf( '%+.1f pts', $delta ) );
+
+		if ( abs( $delta ) < 0.05 ) {
+			echo "    OK: coinciden. El fix hace lo que la medicion predecia.\n";
+		} else {
+			echo "    [!] NO COINCIDEN. Con el fix aplicado el delta tiene que ser 0.0 pts:\n";
+			echo "        esto es un defecto, no un efecto esperado.\n";
+		}
 
 		// --- Impacto en el indice de salud. ----------------------------------
 		$completion = (float) ( $kpis['completion_rate'] ?? 0 );
@@ -645,15 +660,20 @@ final class Diagnostics {
 		printf( "    %-38s %s\n", 'completion_rate usado (constante)', self::scalar( $completion ) . '%' );
 		printf( "    %-38s %s\n", 'retencion 30d usada (constante)', self::scalar( $ret_30 ) . '%' );
 		printf( "    %-38s %-8s %-8s %s\n", '', 'pre', 'post', 'delta' );
-		printf( "    %-38s %-8d %-8d %s\n", 'actual', $a['pre'], $a['post'], '-' );
-		printf( "    %-38s %-8d %-8d %+d\n", 'con activity corregido', $b['pre'], $b['post'], $b['post'] - $a['post'] );
+		printf( "    %-38s %-8d %-8d %s\n", 'con el activity del dashboard', $a['pre'], $a['post'], '-' );
+		printf( "    %-38s %-8d %-8d %+d\n", 'con el activity recalculado', $b['pre'], $b['post'], $b['post'] - $a['post'] );
+
+		printf(
+			"\n    Umbrales (admin/views/dashboard.php:106-108): >= 70 Bueno, >= 40 Regular, resto Critico.\n"
+		);
+		printf( "    Con %d el indice cae en: %s\n", $a['post'], $a['post'] >= 70 ? 'Bueno' : ( $a['post'] >= 40 ? 'Regular' : 'Critico' ) );
 
 		if ( $a['pre'] > 100 ) {
-			printf( "\n    El clamp tapaba %d puntos: sin el, el indice actual daria %d.\n", $a['pre'] - 100, $a['pre'] );
+			printf( "\n    [!] El clamp esta tapando %d puntos: sin el daria %d.\n", $a['pre'] - 100, $a['pre'] );
 		}
 		if ( $activity_actual > 100 ) {
-			echo "    activity_rate actual supera 100%: numerador y denominador son\n";
-			echo "    poblaciones distintas (ver MetricsService.php:144-147).\n";
+			echo "    [!] activity_rate supera 100%. Con el fix de 1.2.9.3-b2 aplicado esto\n";
+			echo "        no deberia pasar: el numerador es subconjunto del denominador.\n";
 		}
 
 		echo "\n";

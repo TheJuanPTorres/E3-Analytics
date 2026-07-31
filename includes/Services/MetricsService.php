@@ -141,9 +141,39 @@ final class MetricsService {
 
         $dropout_rate = max(0, 100 - $completion_rate);
 
+        /*
+         * Tasa de actividad: qué porcentaje de los usuarios registrados en la
+         * ventana se inscribió a al menos un curso dentro de esa misma ventana.
+         *
+         * El numerador es la INTERSECCIÓN de las dos poblaciones, no el total de
+         * usuarios con inscripciones. Por construcción es un subconjunto del
+         * denominador, así que el resultado queda acotado a 0-100.
+         *
+         * Hasta la versión 1.2.9.2-b1 el numerador era $students_with_enrollments,
+         * que cuenta a CUALQUIERA con una inscripción en la ventana, incluidos
+         * usuarios registrados años atrás. Eran dos poblaciones que ni siquiera
+         * se contenían, y el cociente superaba el 100% de forma rutinaria
+         * (medido en producción: 171,0% en period=30). La descripción que la
+         * pantalla ya mostraba —admin/views/dashboard.php:325— siempre describió
+         * el cálculo correcto; esto hace que el código la cumpla.
+         *
+         * IMPORTANTE: activity_rate ya NO se puede derivar de los dos KPIs
+         * visibles en pantalla. 'active_users' (= $students_with_enrollments)
+         * sigue siendo el número de usuarios con actividad, que es otra cosa y
+         * es un KPI legítimo por sí mismo. Dividir active_users por
+         * current_new_users a mano NO reproduce esta tasa.
+         */
         $activity_rate = 0;
         if ($current_new_users > 0) {
-            $activity_rate = round(($students_with_enrollments / $current_new_users) * 100, 1);
+            $registered_and_enrolled = $usersRepo->count_registered_and_enrolled_between(
+                $current_start_utc,
+                $current_end_utc,
+                apply_filters( 'e3a_enrollment_post_type', 'tutor_enrolled' ),
+                $current_start,
+                $current_end
+            );
+
+            $activity_rate = round(($registered_and_enrolled / $current_new_users) * 100, 1);
         }
 
         $performance = 0;

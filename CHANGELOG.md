@@ -1,5 +1,49 @@
 # Changelog — E3 Analytics Dashboard
 
+## 1.2.9.3-b2
+
+### Corregido: activity_rate ("Tasa de actividad")
+
+El KPI mezclaba dos poblaciones distintas y superaba el 100% de forma rutinaria.
+
+- **Numerador anterior:** `students_with_enrollments` — cualquier usuario con una
+  inscripción en la ventana, incluidos los registrados años atrás.
+- **Numerador nuevo:** la intersección real — usuarios que se registraron **y** se
+  inscribieron, ambos dentro de la misma ventana.
+- **Denominador:** sin cambios (`current_new_users`).
+
+Por construcción el numerador ahora es un subconjunto del denominador, así que la
+tasa queda acotada a 0–100.
+
+Esto **no redefine el KPI**: la descripción que la pantalla ya mostraba
+(`admin/views/dashboard.php:325`, "porcentaje de nuevos registros que se
+inscribieron a al menos un curso durante el período") siempre describió este
+cálculo. El código ahora la cumple.
+
+Medido en producción, modo legacy:
+
+| Período   | Antes  | Después |
+|-----------|--------|---------|
+| 7 días    | 127,1% | 81,3%   |
+| 30 días   | 171,0% | 77,0%   |
+| 90 días   | 126,3% | 75,3%   |
+| 365 días  | 47,2%  | 44,0%   |
+| Histórico | 60,2%  | 59,5%   |
+
+**Impacto en el índice de salud.** `activity_rate` pesa 0,30 en la fórmula, así
+que el indicador baja. En `period=30` pasa de 98 a **70**, que cae justo en el
+umbral de "Bueno" (`>= 70`, `admin/views/dashboard.php:106`). Los umbrales no se
+tocaron: el valor anterior estaba inflado por un numerador incorrecto y, además,
+el clamp a 100 venía tapando el exceso.
+
+**`active_users` no cambia** y sigue siendo un KPI legítimo por sí mismo. A
+partir de esta versión **`activity_rate` ya no se puede derivar de los dos KPIs
+visibles en pantalla**: dividir "Usuarios activos" por "Nuevos registros" a mano
+no reproduce la tasa.
+
+La query vive en `UsersRepository::count_registered_and_enrolled_between()`, junto
+al `count_registered_between()` que produce el denominador.
+
 ## 1.2.9.2-b1
 
 ### Eliminado: quizzes de retroalimentación
