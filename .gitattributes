@@ -1,0 +1,32 @@
+# Qué NO viaja al servidor cuando se empaqueta con `git archive`.
+#
+# El zip de deploy se arma así (el --prefix define la carpeta que queda dentro
+# del zip, y tiene que llamarse igual que la carpeta del plugin en
+# wp-content/plugins/, si no WordPress lo trata como un plugin distinto):
+#
+#   git archive --format=zip --prefix=e3-analytics-dashboard/ -o e3-b1.zip <tag>
+#
+# git archive nunca incluye .git/, así que eso no hace falta declararlo.
+
+# Harness de verificación: solo se corre localmente con PHP CLI.
+tests/                                          export-ignore
+
+# Instrucciones para agentes y documentación de desarrollo.
+CLAUDE.md                                       export-ignore
+E3_Analytics_Dashboard_Documentacion_Tecnica.md export-ignore
+
+# Metadatos del repo.
+.gitattributes                                  export-ignore
+.gitignore                                      export-ignore
+.github/                                        export-ignore
+
+# Artefactos de empaquetado, por si alguno quedó sin ignorar.
+*.zip                                           export-ignore
+
+# Normalización de fin de línea: el repo guarda LF.
+* text=auto
+*.php   text eol=lf
+*.js    text eol=lf
+*.css   text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf

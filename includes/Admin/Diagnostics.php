@@ -205,6 +205,23 @@ final class Diagnostics {
 		self::kv( 'modo de fecha activo', DatePeriod::resolve_mode() );
 		self::kv( 'post type de inscripcion', (string) $post_type );
 
+		/*
+		 * Este numero decide el costo de period=all. is_effectively_completed()
+		 * (TutorLms.php:49-50) hace return ANTES de tocar la base si la lista de
+		 * quizzes de retroalimentacion esta vacia. Con 0 configurados, las 3
+		 * queries por par curso-usuario (topics, quizzes, SHOW TABLES) NUNCA se
+		 * ejecutan y el costo por inscripcion baja muchisimo.
+		 */
+		$feedback_ids = \E3_Analytics\Settings::get_feedback_quiz_ids();
+		self::kv( 'quizzes de retroalimentacion', self::num( count( $feedback_ids ) ) );
+		if ( empty( $feedback_ids ) ) {
+			echo "   0 configurados => is_effectively_completed() retorna en TutorLms.php:50\n";
+			echo "   sin tocar la base. El SHOW TABLES de :82 no se ejecuta nunca.\n";
+		} else {
+			echo "   >0 configurados => por cada par curso-usuario con 100% de progreso que\n";
+			echo "   Tutor NO marca como completado, se ejecutan 3 queries extra (:55, :68, :82).\n";
+		}
+
 		self::h( 'USUARIOS' );
 		$users = $wpdb->get_row(
 			"SELECT COUNT(*) AS total, MIN(user_registered) AS min_reg, MAX(user_registered) AS max_reg
@@ -499,6 +516,10 @@ final class Diagnostics {
 			}
 			echo "\n";
 
+			// Medicion hipotetica. Va DESPUES de capturar $elapsed y $queries
+			// para no contaminar la medicion de costo del modo.
+			self::render_hypothetical( $mode, $data, $resolved[ $mode ] );
+
 			self::flush_now();
 		}
 
@@ -579,6 +600,133 @@ final class Diagnostics {
 		echo "  Para el costo de cada modo: tres cargas separadas con &mode=.\n";
 		echo "\n  (El filtro e3a_bypass_cache saltea los transients del reporte de pais,\n";
 		echo "  que es otra cosa: eso no afecta al object cache en memoria.)\n";
+	}
+
+	// -----------------------------------------------------------------------
+	// Bloque HIPOTETICO — medicion, no aplicada al dashboard
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Calcula activity_rate corregido y el impacto en el indice de salud.
+	 *
+	 * NADA de esto se aplica al dashboard: es solo medicion para decidir en B2.
+	 *
+	 * activity_rate de hoy (MetricsService.php:144-147) es
+	 *     students_with_enrollments / current_new_users * 100
+	 * y mezcla dos poblaciones: el numerador cuenta CUALQUIER usuario con una
+	 * inscripcion en la ventana (incluidos los registrados hace años), y el
+	 * denominador solo los registrados en la ventana. Por eso puede pasar de 100.
+	 *
+	 * La version corregida implementa lo que la propia descripcion de la tarjeta
+	 * ya promete (admin/views/dashboard.php:325): usuarios que cumplen LAS DOS
+	 * condiciones a la vez. Queda acotada a 0-100 por construccion, porque el
+	 * numerador es un subconjunto del denominador.
+	 *
+	 * @param string $mode
+	 * @param array  $data  Retorno de MetricsService::get_dashboard_data().
+	 * @param array  $dates Retorno de DatePeriod::resolve() para este modo.
+	 */
+	private static function render_hypothetical( $mode, array $data, array $dates ) {
+		$kpis = (array) ( $data['kpis'] ?? array() );
+		$ret  = (array) ( $data['retention'] ?? array() );
+
+		$new_users       = (int) ( $kpis['current_new_users'] ?? 0 );
+		$activity_actual = (float) ( $kpis['activity_rate'] ?? 0 );
+		$completion      = (float) ( $kpis['completion_rate'] ?? 0 );
+		$ret_30          = (float) ( $ret['30']['rate'] ?? 0 );
+
+		$overlap = self::registered_and_enrolled( $dates );
+
+		$activity_fixed = ( $new_users > 0 )
+			? round( ( $overlap / $new_users ) * 100, 1 )
+			: 0.0;
+
+		// Formula exacta de admin/views/dashboard.php:98-104.
+		$raw_actual = ( $activity_actual * 0.30 ) + ( $completion * 0.40 ) + ( $ret_30 * 0.30 );
+		$raw_fixed  = ( $activity_fixed * 0.30 ) + ( $completion * 0.40 ) + ( $ret_30 * 0.30 );
+
+		$health_actual_pre  = (int) round( $raw_actual );
+		$health_fixed_pre   = (int) round( $raw_fixed );
+		$health_actual_post = max( 0, min( 100, $health_actual_pre ) );
+		$health_fixed_post  = max( 0, min( 100, $health_fixed_pre ) );
+
+		self::h( 'HIPOTETICO — ' . strtoupper( $mode ) . ' (medicion, NO aplicado)' );
+
+		echo "  activity_rate\n";
+		printf( "    %-38s %s\n", 'numerador actual (con inscripcion)', self::num( (int) ( $kpis['active_users'] ?? 0 ) ) );
+		printf( "    %-38s %s\n", 'numerador corregido (ambas cosas)', self::num( $overlap ) );
+		printf( "    %-38s %s\n", 'denominador (current_new_users)', self::num( $new_users ) );
+		printf( "    %-38s %s\n", 'activity_rate_actual', self::scalar( $activity_actual ) . '%' );
+		printf( "    %-38s %s\n", 'activity_rate_corregido', self::scalar( $activity_fixed ) . '%' );
+		printf( "    %-38s %s\n", 'delta', sprintf( '%+.1f pts', $activity_fixed - $activity_actual ) );
+
+		echo "\n  indice de salud  (activity*0.30 + completion*0.40 + retencion30*0.30)\n";
+		printf( "    %-38s %s\n", 'completion_rate usado', self::scalar( $completion ) . '%' );
+		printf( "    %-38s %s\n", 'retencion 30d usada', self::scalar( $ret_30 ) . '%' );
+		printf( "    %-38s %d\n", 'health_actual ANTES del clamp', $health_actual_pre );
+		printf( "    %-38s %d\n", 'health_actual DESPUES del clamp', $health_actual_post );
+		printf( "    %-38s %d\n", 'health_corregido ANTES del clamp', $health_fixed_pre );
+		printf( "    %-38s %d\n", 'health_corregido DESPUES del clamp', $health_fixed_post );
+		printf( "    %-38s %+d\n", 'delta post-clamp', $health_fixed_post - $health_actual_post );
+
+		if ( $health_actual_pre > 100 ) {
+			printf(
+				"\n    El clamp estaba tapando %d puntos: sin el, el indice actual daria %d.\n",
+				$health_actual_pre - 100,
+				$health_actual_pre
+			);
+		}
+		if ( $activity_actual > 100 ) {
+			echo "    activity_rate actual supera 100%: numerador y denominador son\n";
+			echo "    poblaciones distintas (ver MetricsService.php:144-147).\n";
+		}
+
+		echo "\n";
+	}
+
+	/**
+	 * Usuarios que se registraron Y se inscribieron dentro de la misma ventana.
+	 *
+	 * Una sola query, con el patron mixto de zonas horarias que ya usa
+	 * MetricsService.php:275-293:
+	 *   - wp_users.user_registered  -> limites UTC del modo
+	 *   - wp_posts.post_date        -> limites locales del modo
+	 *
+	 * @param array $dates
+	 * @return int
+	 */
+	private static function registered_and_enrolled( array $dates ) {
+		global $wpdb;
+
+		$start_utc = (string) ( $dates['current_start_utc'] ?? '' );
+		$end_utc   = (string) ( $dates['current_end_utc'] ?? '' );
+		$start     = (string) ( $dates['current_start'] ?? '' );
+		$end       = (string) ( $dates['current_end'] ?? '' );
+
+		if ( '' === $start_utc || '' === $end_utc || '' === $start || '' === $end ) {
+			return 0;
+		}
+
+		$post_type = apply_filters( 'e3a_enrollment_post_type', 'tutor_enrolled' );
+
+		return (int) $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT COUNT(DISTINCT u.ID)
+				 FROM {$wpdb->users} u
+				 INNER JOIN {$wpdb->posts} p
+				   ON p.post_author = u.ID
+				 WHERE u.user_registered BETWEEN %s AND %s
+				   AND p.post_type   = %s
+				   AND p.post_status IN ('publish','completed')
+				   AND p.post_parent > 0
+				   AND p.post_date BETWEEN %s AND %s",
+				$start_utc,
+				$end_utc,
+				$post_type,
+				$start,
+				$end
+			)
+		);
 	}
 
 	/**
