@@ -97,8 +97,8 @@ final class ExportService {
 
             case 'active_users':
                 $rows = $this->get_active_users_between( $start, $end );
-                $sheets[] = [ 'name' => 'UsuariosActivos', 'rows' => $rows ];
-                $this->maybe_add_user_meta_sheet( $sheets, $rows, 'user_id' );
+                $sheets[] = [ 'name' => 'ResumenPorUsuario', 'rows' => $rows ];
+                $this->maybe_add_user_meta_sheet( $sheets, $rows, 'ID de usuario' );
                 return [ 'filename' => 'e3-dashboard-usuarios-activos' . $this->filename_suffix( $dates ), 'sheets' => $sheets ];
 
             case 'cross_course_users':
@@ -119,31 +119,51 @@ final class ExportService {
             case 'insights':
             case 'retention':
             default:
+                /*
+                 * 'courses_detail' es la tarjeta "Detalle por curso": la clienta
+                 * pidió exportar UNA tabla, no seis hojas. Para esa key el
+                 * archivo queda en Resumen + Cursos + ProgresoPorCurso.
+                 * Las otras 5 keys de esta rama no cambian.
+                 */
+                $only_courses = ( 'courses_detail' === $key );
+
                 $rows = $this->get_dashboard_metrics_snapshot( $dates );
-                $sheets[] = [ 'name' => 'Métricas', 'rows' => $rows['metrics'] ?? [ [ 'Sin datos' ] ] ];
+
+                if ( ! $only_courses ) {
+                    $sheets[] = [ 'name' => 'Métricas', 'rows' => $rows['metrics'] ?? [ [ 'Sin datos' ] ] ];
+                }
 
                 if ( ! empty( $rows['courses'] ) ) {
                     $sheets[] = [ 'name' => 'Cursos', 'rows' => $rows['courses'] ];
                 }
 
-                if ( ! empty( $rows['retention'] ) ) {
+                if ( ! $only_courses && ! empty( $rows['retention'] ) ) {
                     $sheets[] = [ 'name' => 'Retención', 'rows' => $rows['retention'] ];
                 }
 
-                if ( ! empty( $rows['dau_mau'] ) ) {
+                if ( ! $only_courses && ! empty( $rows['dau_mau'] ) ) {
                     $sheets[] = [ 'name' => 'DAU_MAU', 'rows' => $rows['dau_mau'] ];
                 }
 
-                // Para todas las cards, intenta incluir también listados de usuarios/inscripciones del período.
-                $enroll_rows = $this->get_enrollments_between( $start, $end, 10000 );
-                if ( count( $enroll_rows ) > 1 ) {
-                    $sheets[] = [ 'name' => 'Inscripciones', 'rows' => $enroll_rows ];
-                }
+                if ( $only_courses ) {
+                    // Una fila por par usuario-curso. Sin consultas adicionales:
+                    // reusa lo que el recorrido de inscripciones ya calcula.
+                    $by_course = $this->get_active_users_by_course_between( $start, $end );
+                    if ( count( $by_course ) > 1 ) {
+                        $sheets[] = [ 'name' => 'ProgresoPorCurso', 'rows' => $by_course ];
+                    }
+                } else {
+                    // Para todas las cards, intenta incluir también listados de usuarios/inscripciones del período.
+                    $enroll_rows = $this->get_enrollments_between( $start, $end, 10000 );
+                    if ( count( $enroll_rows ) > 1 ) {
+                        $sheets[] = [ 'name' => 'Inscripciones', 'rows' => $enroll_rows ];
+                    }
 
-                $active_rows = $this->get_active_users_between( $start, $end );
-                if ( count( $active_rows ) > 1 ) {
-                    $sheets[] = [ 'name' => 'UsuariosActivos', 'rows' => $active_rows ];
-                    $this->maybe_add_user_meta_sheet( $sheets, $active_rows, 'user_id' );
+                    $active_rows = $this->get_active_users_between( $start, $end );
+                    if ( count( $active_rows ) > 1 ) {
+                        $sheets[] = [ 'name' => 'ResumenPorUsuario', 'rows' => $active_rows ];
+                        $this->maybe_add_user_meta_sheet( $sheets, $active_rows, 'ID de usuario' );
+                    }
                 }
 
                 // For retention export, also include active user lists by windows.
@@ -404,7 +424,17 @@ final class ExportService {
         } );
 
         $out = [
-            [ 'user_id', 'user_login', 'display_name', 'email', 'roles', 'registered', 'enrollments', 'completed', 'avg_progress_%' ]
+            [
+                'ID de usuario',
+                'Usuario',
+                'Nombre',
+                'Email',
+                'Roles',
+                'Fecha de registro',
+                'Cursos inscritos en el período',
+                'Cursos completados (estado actual)',
+                'Progreso promedio % (estado actual)',
+            ],
         ];
 
         foreach ( $by_user as $uid => $stats ) {
@@ -424,6 +454,122 @@ final class ExportService {
                 (int) ( $stats['completed'] ?? 0 ),
                 (float) $avg,
             ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Una fila por par usuario-curso: el detalle que get_active_users_between()
+     * calcula y despues descarta al agregar por usuario.
+     *
+     * NO agrega ni una consulta. El bucle de abajo llama a
+     * course_progress_percent() e is_effectively_completed() exactamente una vez
+     * por par deduplicado, igual que el metodo agregado. get_userdata() y
+     * get_the_title() se sirven del object cache de WordPress tras la primera
+     * lectura de cada usuario y de cada curso.
+     *
+     * OJO con la columna de completacion: is_effectively_completed() informa el
+     * estado ACTUAL del alumno en el curso, no si completo dentro de la ventana.
+     * El encabezado lo dice.
+     *
+     * @param string $start
+     * @param string $end
+     * @return array
+     */
+    private function get_active_users_by_course_between( $start, $end ) {
+        $repo  = new EnrollmentsRepository();
+        $tutor = new TutorLms();
+
+        $rows = $repo->rows_between( $start, $end );
+
+        // 1) Deduplicar por par, quedandose con la fecha de inscripcion MINIMA.
+        //    rows_between() no tiene ORDER BY, asi que tomar "la primera que
+        //    aparezca" haria depender el valor del orden que devuelva MySQL.
+        $pairs = [];
+
+        foreach ( $rows as $r ) {
+            $cid = (int) ( $r['course_id'] ?? 0 );
+            $uid = (int) ( $r['user_id'] ?? 0 );
+            if ( $cid <= 0 || $uid <= 0 ) continue;
+
+            $pair        = $cid . '|' . $uid;
+            $enroll_date = (string) ( $r['enroll_date'] ?? '' );
+
+            if ( ! isset( $pairs[ $pair ] ) ) {
+                $pairs[ $pair ] = [
+                    'course_id'   => $cid,
+                    'user_id'     => $uid,
+                    'enroll_date' => $enroll_date,
+                ];
+                continue;
+            }
+
+            if ( '' !== $enroll_date
+                 && ( '' === $pairs[ $pair ]['enroll_date'] || $enroll_date < $pairs[ $pair ]['enroll_date'] ) ) {
+                $pairs[ $pair ]['enroll_date'] = $enroll_date;
+            }
+        }
+
+        // 2) Armar las filas. Una llamada a Tutor por par, como el metodo agregado.
+        $data = [];
+
+        foreach ( $pairs as $p ) {
+            $uid = (int) $p['user_id'];
+            $cid = (int) $p['course_id'];
+
+            $u = get_userdata( $uid );
+            if ( ! $u ) continue;
+
+            $title    = (string) get_the_title( $cid );
+            $name     = (string) $u->display_name;
+            $progress = round( (float) $tutor->course_progress_percent( $cid, $uid ), 1 );
+
+            $data[] = [
+                'name'  => $name,
+                'title' => $title,
+                'row'   => [
+                    $uid,
+                    (string) $u->user_login,
+                    $name,
+                    (string) $u->user_email,
+                    is_array( $u->roles ) ? implode( ',', $u->roles ) : '',
+                    (string) $u->user_registered,
+                    $cid,
+                    $title,
+                    (string) $p['enroll_date'],
+                    (float) $progress,
+                    $tutor->is_effectively_completed( $cid, $uid ) ? 'si' : 'no',
+                ],
+            ];
+        }
+
+        // 3) Ordenar por alumno y despues por curso: asi las filas de un mismo
+        //    alumno quedan juntas, que es como se lee la planilla.
+        usort( $data, function( $a, $b ) {
+            $c = strnatcasecmp( $a['name'], $b['name'] );
+
+            return 0 !== $c ? $c : strnatcasecmp( $a['title'], $b['title'] );
+        } );
+
+        $out = [
+            [
+                'ID de usuario',
+                'Usuario',
+                'Nombre',
+                'Email',
+                'Roles',
+                'Fecha de registro',
+                'ID del curso',
+                'Curso',
+                'Fecha de inscripción',
+                'Progreso % (estado actual)',
+                'Completado (estado actual)',
+            ],
+        ];
+
+        foreach ( $data as $d ) {
+            $out[] = $d['row'];
         }
 
         return $out;

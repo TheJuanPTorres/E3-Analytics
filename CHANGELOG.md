@@ -1,5 +1,34 @@
 # Changelog — E3 Analytics Dashboard
 
+## 1.3.1
+
+### Export "Detalle por curso": progreso por curso, y una sola tabla
+
+La tarjeta **Detalle por curso** exportaba siete hojas cuando la clienta pedía
+exportar una tabla, y su hoja de usuarios reportaba la actividad **agregada**: un
+alumno con progreso en dos cursos aparecía en una sola fila con promedios.
+
+- **Hoja nueva `ProgresoPorCurso`** — una fila por par alumno-curso, con curso,
+  fecha de inscripción, progreso y estado de completación. 11 columnas, ordenada
+  por alumno y después por curso.
+- **`courses_detail` deja de emitir siete hojas.** Ahora son tres: `Resumen`,
+  `Cursos` y `ProgresoPorCurso`. Las otras cinco keys que comparten esa rama
+  (`performance`, `chart_new_vs_returning`, `top_courses`, `insights`,
+  `retention`) no cambian.
+- **`UsuariosActivos` pasa a llamarse `ResumenPorUsuario`** en los dos exports
+  que la generan. Mismas columnas, mismos datos.
+- **Encabezados en español y explícitos** en las dos hojas. En particular,
+  "Completado (estado actual)" y "Progreso promedio % (estado actual)": esa
+  columna informa el estado actual del alumno en el curso, **no** si completó
+  dentro del período consultado.
+
+**Sin consultas nuevas.** El detalle por curso ya se calculaba y se descartaba al
+agregar por usuario. Medido con 3.081 inscripciones sintéticas: las cinco keys
+sin cambios mantienen su conteo exacto de consultas, y `courses_detail` baja de
+15 a **14** porque deja de pedir la hoja de inscripciones.
+
+La hoja crece de ~2.074 filas (una por alumno) a ~3.081 (una por par).
+
 ## 1.3.0 — release
 
 Consolida el trabajo de B1 a B4. La funcionalidad visible es el **selector de
