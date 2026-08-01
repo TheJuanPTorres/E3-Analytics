@@ -1,5 +1,72 @@
 # Changelog — E3 Analytics Dashboard
 
+## 1.3.2
+
+### Corregido: "Recurrentes" daba 0 en todos los cursos, siempre
+
+Las columnas **Nuevos** y **Recurrentes** de "Detalle por curso" no medían lo que
+sus nombres decían.
+
+- **Definición anterior:** "Nuevos" = primera inscripción de ese usuario **a ese
+  curso**. "Recurrentes" = re-inscripción al mismo curso. Como Tutor LMS crea un
+  solo registro por par usuario-curso, la re-inscripción no ocurre nunca y la
+  columna **daba 0 en todos los cursos, en todos los períodos**. La serie
+  "Recurrentes" del gráfico era una línea plana en cero.
+- **Definición nueva:** "Nuevos (registrados en el período)" = el usuario se
+  registró en el sitio **dentro del período** y se inscribió al curso durante el
+  período. "Ya registrados antes" = ya estaba registrado de antes.
+
+No era un desfase de fechas ni una comparación mal armada: la comparación
+anterior era coherente (hora local contra hora local). Era la definición la que
+respondía otra pregunta. **Ningún otro KPI estaba afectado.**
+
+Se aplicó a los cuatro consumidores: la tabla del dashboard, el gráfico "Nuevos
+vs Recurrentes", la hoja `Cursos` del export (columnas
+`nuevos_registrados_en_periodo` y `ya_registrados_antes`) y la ventana anterior.
+
+**Identidad garantizada:** para cada curso, Nuevos + Ya registrados antes =
+inscripciones del curso en el período. Se cumple por construcción.
+
+### Columna "Registrado en el período"
+
+Nueva en los dos exports de usuarios, con valores `sí` / `no`:
+
+- **`ProgresoPorCurso`** (export "Detalle por curso"), junto a "Fecha de registro".
+- **Export de País**, en la misma posición.
+
+Un usuario borrado deja su inscripción huérfana y cae en `no`: se registró en
+algún momento del pasado, no dentro del período.
+
+### La definición vive en un solo lugar
+
+`UsersRepository::ids_registered_between()` es **la** definición de "registrado en
+el período" para todo el plugin, con límites UTC porque `user_registered` está en
+UTC. Tres consumidores la usan. Cualquier consumidor nuevo debe llamarla en vez
+de reimplementarla.
+
+### Costo
+
+- **Dashboard: cero queries netas.** Se eliminó
+  `EnrollmentsRepository::first_enrollment_map_until()`, que quedó sin llamadores,
+  y se agregó la del conjunto de registrados. 12 consultas antes, 12 después.
+  Además libera memoria: el método viejo construía un array con **todos** los
+  pares usuario-curso de la historia; el nuevo, una lista de IDs del período.
+- **Export "Detalle por curso": +1 query**, por la columna nueva de
+  `ProgresoPorCurso`.
+- **Export de País: sin costo.** La consulta de registrados ya se ejecutaba para
+  armar el universo de usuarios y su resultado se descartaba; ahora se conserva.
+
+Se eliminaron también dos contadores internos, `previous_first_time_enroll` y
+`previous_returning_enroll`, que se incrementaban y nunca se leían.
+
+### Temporal: descubridor de `meta_key`
+
+`?page=e3-analytics-dashboard&e3a_scan=metakeys`, solo para administradores.
+Lista los `meta_key` de `wp_usermeta` con su frecuencia y un valor de ejemplo,
+para decidir qué campos demográficos van al export de País. Los valores de claves
+que parecen contener secretos salen como `[redactado]`. **Se elimina en el release
+que agregue esas columnas.**
+
 ## 1.3.1
 
 ### Export "Detalle por curso": progreso por curso, y una sola tabla

@@ -27,36 +27,6 @@ final class EnrollmentsRepository {
         return is_array($rows) ? $rows : [];
     }
 
-    public function first_enrollment_map_until($until_date) {
-        global $wpdb;
-
-        $rows = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT post_parent AS course_id, post_author AS user_id, MIN(post_date) AS first_date
-                 FROM {$wpdb->posts}
-                 WHERE post_type = %s
-                   AND post_status IN ('publish','completed')
-                   AND post_parent > 0
-                   AND post_date <= %s
-                 GROUP BY post_parent, post_author",
-                $this->post_type,
-                $until_date
-            ),
-            ARRAY_A
-        );
-
-        $map = [];
-        if (is_array($rows)) {
-            foreach ($rows as $row) {
-                $c = (int) ($row['course_id'] ?? 0);
-                $u = (int) ($row['user_id'] ?? 0);
-                $d = $row['first_date'] ?? null;
-                if ($c && $u && $d) $map["{$c}|{$u}"] = $d;
-            }
-        }
-        return $map;
-    }
-
     public function first_time_enrollments_count($start, $end) {
         global $wpdb;
 

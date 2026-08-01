@@ -522,8 +522,8 @@ $dash_empty    = round($circumference - $dash_filled, 2);
             <tr>
               <th>Curso</th>
               <th>Inscripciones período</th>
-              <th>Nuevos (curso)</th>
-              <th>Recurrentes</th>
+              <th title="Usuarios que se registraron en el sitio dentro del período y se inscribieron a este curso durante el período.">Nuevos (registrados en el período)</th>
+              <th title="Usuarios que ya estaban registrados antes del período y se inscribieron a este curso durante el período.">Ya registrados antes</th>
               <th>Período anterior</th>
               <th>Variación</th>
               <th>Completados</th>

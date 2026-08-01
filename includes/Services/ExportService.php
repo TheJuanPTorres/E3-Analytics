@@ -4,6 +4,7 @@ namespace E3_Analytics\Services;
 use E3_Analytics\Support\DatePeriod;
 use E3_Analytics\Support\BucketHelper;
 use E3_Analytics\Repositories\EnrollmentsRepository;
+use E3_Analytics\Repositories\UsersRepository;
 use E3_Analytics\Integrations\TutorLms;
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -148,7 +149,7 @@ final class ExportService {
                 if ( $only_courses ) {
                     // Una fila por par usuario-curso. Sin consultas adicionales:
                     // reusa lo que el recorrido de inscripciones ya calcula.
-                    $by_course = $this->get_active_users_by_course_between( $start, $end );
+                    $by_course = $this->get_active_users_by_course_between( $start, $end, $start_utc, $end_utc );
                     if ( count( $by_course ) > 1 ) {
                         $sheets[] = [ 'name' => 'ProgresoPorCurso', 'rows' => $by_course ];
                     }
@@ -477,9 +478,21 @@ final class ExportService {
      * @param string $end
      * @return array
      */
-    private function get_active_users_by_course_between( $start, $end ) {
+    private function get_active_users_by_course_between( $start, $end, $start_utc = '', $end_utc = '' ) {
         $repo  = new EnrollmentsRepository();
         $tutor = new TutorLms();
+
+        /*
+         * Cohorte de registro. La definición vive en
+         * UsersRepository::ids_registered_between(): límites UTC, porque
+         * user_registered está en UTC.
+         *
+         * Un usuario borrado deja su inscripción huérfana y no aparece en el
+         * set, así que cae en "no". Es correcto: se registró en algún momento
+         * del pasado, no dentro del período.
+         */
+        $users_repo     = new UsersRepository();
+        $registered_set = array_flip( $users_repo->ids_registered_between( $start_utc, $end_utc ) );
 
         $rows = $repo->rows_between( $start, $end );
 
@@ -535,6 +548,7 @@ final class ExportService {
                     (string) $u->user_email,
                     is_array( $u->roles ) ? implode( ',', $u->roles ) : '',
                     (string) $u->user_registered,
+                    isset( $registered_set[ $uid ] ) ? 'sí' : 'no',
                     $cid,
                     $title,
                     (string) $p['enroll_date'],
@@ -560,6 +574,7 @@ final class ExportService {
                 'Email',
                 'Roles',
                 'Fecha de registro',
+                'Registrado en el período',
                 'ID del curso',
                 'Curso',
                 'Fecha de inscripción',
@@ -595,7 +610,17 @@ final class ExportService {
         ];
 
         $courses = [
-            [ 'course_id', 'course_title', 'enroll_period', 'new_course', 'returning', 'prev_period', 'growth_%', 'completed', 'completion_rate_%' ]
+            [
+                'course_id',
+                'course_title',
+                'enroll_period',
+                'nuevos_registrados_en_periodo',
+                'ya_registrados_antes',
+                'prev_period',
+                'growth_%',
+                'completed',
+                'completion_rate_%',
+            ]
         ];
 
         foreach ( (array) ( $data['courses_stats'] ?? [] ) as $row ) {

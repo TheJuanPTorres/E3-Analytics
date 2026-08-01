@@ -143,6 +143,12 @@ final class Page {
             wp_die( __( 'No tienes permisos suficientes para ver esta página.', 'e3-analytics' ) );
         }
 
+        // TEMPORAL: descubrimiento de meta_key. Borrar al agregar las columnas
+        // demográficas. Si la guarda no se cumple, sigue el dashboard normal.
+        if ( MetaScan::maybe_render() ) {
+            return;
+        }
+
         $period = $this->read_period();
 
         $service = new MetricsService();

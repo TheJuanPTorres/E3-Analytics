@@ -19,6 +19,42 @@ final class UsersRepository {
     }
 
     /**
+     * IDs de los usuarios registrados dentro del período.
+     *
+     * ESTA ES LA DEFINICIÓN de "registrado en el período" para todo el plugin.
+     * Cualquier consumidor nuevo que necesite esa pregunta debe llamar acá y no
+     * reimplementarla: si dos lugares la escriben por su cuenta, terminan
+     * divergiendo en silencio.
+     *
+     * wp_users.user_registered lo escribe WP core en UTC, así que los límites
+     * tienen que ser las claves _utc de DatePeriod, NO las locales. Con el
+     * offset del sitio, el fin de un día local cae en el día UTC siguiente.
+     *
+     * @param string $start_utc Límite inicial UTC.
+     * @param string $end_utc   Límite final UTC.
+     * @return int[] IDs, sin orden garantizado.
+     */
+    public function ids_registered_between( $start_utc, $end_utc ) {
+        global $wpdb;
+
+        if ( ! $start_utc || ! $end_utc ) {
+            return array();
+        }
+
+        $rows = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT ID
+                 FROM {$wpdb->users}
+                 WHERE user_registered BETWEEN %s AND %s",
+                $start_utc,
+                $end_utc
+            )
+        );
+
+        return array_map( 'intval', (array) $rows );
+    }
+
+    /**
      * Usuarios que se registraron Y se inscribieron a algún curso, ambos dentro
      * de la misma ventana. Es el numerador de activity_rate.
      *

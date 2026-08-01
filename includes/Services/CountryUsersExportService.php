@@ -3,6 +3,7 @@ namespace E3_Analytics\Services;
 
 use E3_Analytics\Support\DatePeriod;
 use E3_Analytics\Support\CountryHelper;
+use E3_Analytics\Repositories\UsersRepository;
 use E3_Analytics\Integrations\TutorLms;
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -15,6 +16,14 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  */
 final class CountryUsersExportService {
     use CountryHelper;
+
+    /**
+     * Set de IDs registrados dentro del período, con los IDs como CLAVES.
+     * Lo llena get_user_universe_ids() reusando la query que ya hacía.
+     *
+     * @var array<int,int>
+     */
+    private $registered_in_period = array();
 
     /**
      * @param string|int|null $period_override   7/30/90/365/all
@@ -90,7 +99,7 @@ final class CountryUsersExportService {
         $fixed_header = [
             'user_id', 'nickname', 'first_name', 'last_name', 'display_name',
             'user_email', 'roles', 'capabilities_json', 'description',
-            'user_registered', 'locale',
+            'user_registered', 'Registrado en el período', 'locale',
             'country_resolved', 'country_source', 'country_lms_raw', 'tutor_login_country_iso2',
             'profile_type_lms', 'profile_type_other_lms', 'gender_lms',
             'age_range_lms', 'age_min', 'age_max', 'age_midpoint',
@@ -207,6 +216,9 @@ final class CountryUsersExportService {
             $caps_json,
             $desc,
             $u ? (string) $u->user_registered    : '',
+            // Un usuario borrado no está en el set: cae en 'no'. Correcto, se
+            // registró en algún momento del pasado, no dentro del período.
+            isset( $this->registered_in_period[ $user_id ] ) ? 'sí' : 'no',
             $locale,
             $label,
             $source,
@@ -382,18 +394,21 @@ final class CountryUsersExportService {
 
         $ids = [];
 
-        // Registrados: user_registered, en UTC.
-        if ( $start_utc && $end_utc ) {
-            $registered = $wpdb->get_results(
-                $wpdb->prepare(
-                    "SELECT ID FROM {$wpdb->users} WHERE user_registered BETWEEN %s AND %s",
-                    $start_utc, $end_utc
-                ),
-                ARRAY_A
-            );
-            foreach ( (array) $registered as $r ) {
-                $ids[] = (int) ( $r['ID'] ?? 0 );
-            }
+        /*
+         * Registrados en el período. Se delega en la definición compartida en
+         * lugar de repetir la query acá: si los dos lugares la escriben por su
+         * cuenta, terminan divergiendo. El set se CONSERVA en
+         * $this->registered_in_period para la columna "Registrado en el
+         * período"; antes se descartaba después de armar el universo, y la
+         * columna habría costado una query de más.
+         */
+        $users_repo = new UsersRepository();
+        $registered = $users_repo->ids_registered_between( $start_utc, $end_utc );
+
+        $this->registered_in_period = array_flip( $registered );
+
+        foreach ( $registered as $rid ) {
+            $ids[] = (int) $rid;
         }
 
         // Inscriptos: post_date, en hora local.

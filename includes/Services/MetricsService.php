@@ -54,7 +54,22 @@ final class MetricsService {
         $previous_first_time_enrollments = $has_compare ? $enrollRepo->first_time_enrollments_count($prev_start, $prev_end) : null;
         $growth_first_time_enrollments   = $has_compare ? Math::growth_percent($current_first_time_enrollments, $previous_first_time_enrollments) : null;
 
-        $first_enroll_map = $enrollRepo->first_enrollment_map_until($current_end);
+        /*
+         * Cohorte de registro: quiénes de los que se inscribieron en la ventana
+         * se habían registrado DENTRO de esa misma ventana.
+         *
+         * Antes esto se resolvía con el MIN(post_date) del par curso-usuario, o
+         * sea "primera inscripción a ese curso". Como Tutor crea un solo post
+         * por par, ese MIN siempre caía dentro de la ventana y la columna
+         * "Recurrentes" daba 0 en todos los cursos, siempre. Medía
+         * re-inscripciones al mismo curso, que en esta plataforma no ocurren.
+         *
+         * La definición vive en UsersRepository::ids_registered_between(), con
+         * límites UTC porque user_registered está en UTC.
+         */
+        $registered_set = array_flip(
+            $usersRepo->ids_registered_between( $current_start_utc, $current_end_utc )
+        );
 
         $users_with_enroll = [];
         $current_completed = 0;
@@ -73,8 +88,6 @@ final class MetricsService {
                     'previous_enroll'            => 0,
                     'current_first_time_enroll'  => 0,
                     'current_returning_enroll'   => 0,
-                    'previous_first_time_enroll' => 0,
-                    'previous_returning_enroll'  => 0,
                 ];
             }
 
@@ -90,10 +103,13 @@ final class MetricsService {
                 $current_completed++;
             }
 
-            $key        = $course_id . '|' . $user_id;
-            $first_date = $first_enroll_map[$key] ?? null;
-
-            if ($first_date && $first_date >= $current_start && $first_date <= $current_end) {
+            /*
+             * Un usuario borrado deja su post de inscripción huérfano y no
+             * aparece en el set: cae en "ya registrado antes". Es la
+             * clasificación conservadora — se registró en algún momento del
+             * pasado — y mantiene la identidad de la suma.
+             */
+            if ( isset( $registered_set[ $user_id ] ) ) {
                 $course_map[$course_id]['current_first_time_enroll']++;
             } else {
                 $course_map[$course_id]['current_returning_enroll']++;
@@ -112,21 +128,17 @@ final class MetricsService {
                     'previous_enroll'            => 0,
                     'current_first_time_enroll'  => 0,
                     'current_returning_enroll'   => 0,
-                    'previous_first_time_enroll' => 0,
-                    'previous_returning_enroll'  => 0,
                 ];
             }
 
+            /*
+             * La ventana anterior solo aporta el total de inscripciones, que es
+             * lo que consume la columna "Período anterior" y el cálculo de
+             * variación. Los contadores previous_first_time_enroll y
+             * previous_returning_enroll existían pero nadie los leía: no
+             * llegaban a courses_stats. Se eliminaron en vez de migrarlos.
+             */
             $course_map[$course_id]['previous_enroll']++;
-
-            $key        = $course_id . '|' . $user_id;
-            $first_date = $first_enroll_map[$key] ?? null;
-
-            if ($first_date && $first_date >= $prev_start && $first_date <= $prev_end) {
-                $course_map[$course_id]['previous_first_time_enroll']++;
-            } else {
-                $course_map[$course_id]['previous_returning_enroll']++;
-            }
         }
 
         $students_with_enrollments = count($users_with_enroll);

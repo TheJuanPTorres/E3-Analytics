@@ -172,7 +172,7 @@
       labels: fullLabels,
       datasets: [
         {
-          label: 'Nuevos inscritos',
+          label: 'Nuevos (registrados en el período)',
           data: first,
           backgroundColor: 'rgba(37, 99, 235, .55)',
           borderColor: 'rgba(37, 99, 235, 1)',
@@ -184,7 +184,7 @@
           barPercentage: 0.9,
         },
         {
-          label: 'Recurrentes',
+          label: 'Ya registrados antes',
           data: returning,
           backgroundColor: 'rgba(99, 102, 241, .35)',
           borderColor: 'rgba(99, 102, 241, 1)',
