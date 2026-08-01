@@ -125,6 +125,7 @@ final class MetaScan {
 
 		echo "\n";
 		self::render_country_crosstab();
+		CountrySim::render();
 
 		echo '</pre></div>';
 

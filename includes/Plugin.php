@@ -18,6 +18,7 @@ require_once E3A_PATH . 'includes/Services/ExportService.php';
 require_once E3A_PATH . 'includes/Admin/Page.php';
 // TEMPORAL: borrar junto con el archivo al agregar las columnas demográficas.
 require_once E3A_PATH . 'includes/Admin/MetaScan.php';
+require_once E3A_PATH . 'includes/Admin/CountrySim.php';
 
 final class Plugin {
     private static $instance = null;
