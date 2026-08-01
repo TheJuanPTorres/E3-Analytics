@@ -17,48 +17,34 @@ final class CountryAnalyticsService {
         $start      = (string) ( $dates['current_start'] ?? '' );
         $end        = (string) ( $dates['current_end'] ?? '' );
         $is_all     = (bool) ( $dates['is_all'] ?? false );
-        $mode       = (string) ( $dates['mode'] ?? DatePeriod::MODE_LEGACY );
 
-        // user_registered está en UTC. En legacy y calendar estas claves son copia
-        // literal de las locales, así que no hay condicional de modo acá.
+        // user_registered está en UTC; post_date en hora local. Son valores
+        // distintos: con offset -5 el fin de un día local cae en el día UTC siguiente.
         $start_utc = (string) ( $dates['current_start_utc'] ?? $start );
         $end_utc   = (string) ( $dates['current_end_utc'] ?? $end );
 
-        /*
-         * El modo entra en la clave: legacy y calendar producen métricas distintas
-         * para el mismo period_key, y sin el modo un cambio de configuración
-         * devolvería el payload del modo anterior.
-         */
-        $cache_key = 'e3a_country_' . md5( $mode . '|' . $period_key . '|' . $start . '|' . $end );
+        $cache_key = 'e3a_country_' . md5( $period_key . '|' . $start . '|' . $end );
 
         // Identidad del período con el que se calculan las métricas de este payload.
         $computed_for = [
-            'mode'          => $mode,
             'period_key'    => $period_key,
             'current_start' => $start,
             'current_end'   => $end,
         ];
 
-        // El modo compare de la herramienta de diagnóstico saltea el caché para
-        // medir cálculo en frío y para no contaminar un modo con otro.
-        $bypass_cache = (bool) apply_filters( 'e3a_bypass_cache', false );
-
-        if ( ! $bypass_cache ) {
-            $cached = get_transient( $cache_key );
-            if ( is_array( $cached )
-                 && isset( $cached['_computed_for'] )
-                 && $cached['_computed_for'] === $computed_for ) {
-                /*
-                 * El payload cacheado NO contiene 'dates': se le adjunta el fresco
-                 * al retornar. Motivo: 'notice' no se deriva de la clave de caché.
-                 * Un rango recortado y el rango ya recortado comparten clave, así
-                 * que cachear 'dates' mostraría un aviso de recorte en un request
-                 * que no recortó nada. Se elimina la clase de problema en lugar de
-                 * vigilarla.
-                 */
-                $cached['dates'] = $dates;
-                return $cached;
-            }
+        $cached = get_transient( $cache_key );
+        if ( is_array( $cached )
+             && isset( $cached['_computed_for'] )
+             && $cached['_computed_for'] === $computed_for ) {
+            /*
+             * El payload cacheado NO contiene 'dates': se le adjunta el fresco al
+             * retornar. Motivo: 'notice' no se deriva de la clave de caché. Un
+             * rango recortado y el rango ya recortado comparten clave, así que
+             * cachear 'dates' mostraría un aviso de recorte en un request que no
+             * recortó nada.
+             */
+            $cached['dates'] = $dates;
+            return $cached;
         }
 
         global $wpdb;
@@ -245,22 +231,13 @@ final class CountryAnalyticsService {
         ];
 
         /*
-         * TTL de 60 s. Hasta ahora el caché nunca acertaba porque current_end
-         * llevaba segundos y la clave cambiaba a cada request. En modo calendario
-         * la clave se estabiliza y el caché empieza a funcionar de verdad.
-         *
-         * Hoy ninguna opción del plugin altera el cálculo de las métricas, así
-         * que no hay nada que invalidar: el caso que preocupaba —guardar la
-         * configuración de quizzes de retroalimentación y seguir viendo números
-         * viejos— desapareció con esa funcionalidad. Pero el MECANISMO de
-         * invalidación sigue sin existir: si mañana se agrega cualquier opción
-         * que influya en los números, el problema vuelve. Con 60 s la exposición
-         * queda acotada a un minuto. El salt de versión de opciones en la clave
-         * sigue pendiente.
+         * TTL de 60 s. Ninguna opción del plugin altera hoy el cálculo de las
+         * métricas, así que no hay nada que invalidar. Pero el MECANISMO de
+         * invalidación no existe: si mañana se agrega una opción que influya en
+         * los números, hará falta un salt de versión en la clave. Con 60 s la
+         * exposición queda acotada a un minuto.
          */
-        if ( ! $bypass_cache ) {
-            set_transient( $cache_key, $out, 60 );
-        }
+        set_transient( $cache_key, $out, 60 );
 
         // 'dates' se adjunta fresco, nunca se cachea.
         $out['dates'] = $dates;

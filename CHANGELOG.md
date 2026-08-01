@@ -1,5 +1,99 @@
 # Changelog — E3 Analytics Dashboard
 
+## 1.3.0 — release
+
+Consolida el trabajo de B1 a B4. La funcionalidad visible es el **selector de
+período con rango personalizado**; el resto es la corrección de los defectos que
+aparecieron al construirlo.
+
+### Lo que ve la clienta
+
+- **Selector de período**: 10 presets (7/30/90/365 días, este mes, mes pasado,
+  este trimestre, este año, año pasado, histórico) más **rango personalizado**
+  con dos selectores de fecha nativos.
+- **Los registros del día ya no se pierden.** `wp_users.user_registered` lo
+  escribe WordPress en UTC y el plugin lo comparaba contra límites en hora local.
+  Con el offset −5 del sitio, todo usuario registrado después de las 19:00 hora
+  local quedaba contado en el día siguiente y era invisible en el dashboard hasta
+  la jornada siguiente. Pasaba todos los días.
+- **"Tasa de actividad" deja de superar el 100%.** Mezclaba dos poblaciones
+  distintas; medido en producción daba 171,0% en 30 días. Ahora es lo que su
+  propia descripción siempre prometió, y el índice de salud baja en consecuencia.
+- **Completación simplificada**: un curso al 100% de progreso cuenta como
+  completado. El filtro de quizzes de retroalimentación se eliminó tras medir que
+  no rechazaba ninguna inscripción en 3.071 pares curso-usuario.
+- **Comparaciones sin base** muestran un guion en lugar de "+100%".
+- **Períodos sin datos** muestran "Sin datos en este período" y ya no disparan la
+  alarma roja de abandono.
+- **Retención y DAU/MAU** quedan etiquetadas: no responden al filtro de fechas.
+
+### Interno
+
+- `DatePeriod` resuelve siempre en días calendario, con límites locales y sus
+  equivalentes UTC. Se eliminan la rama legacy, el flag de modo
+  (`E3A_DATE_MODE`, `e3a_date_mode`, filtro `e3a_date_mode`) y toda la
+  matemática basada en `current_time('timestamp')` + `date_i18n()` + `strtotime()`
+  para construir literales SQL.
+- El período viaja como un escalar `period`. `Admin\Page::read_period()` es el
+  único lector del request.
+- Se elimina la herramienta de diagnóstico y la página de Configuración.
+- `uninstall.php` nuevo: borra las opciones huérfanas y los transients.
+- Headers `Requires PHP: 8.1`, `Requires at least`, `Text Domain`, `License`.
+  Sin `Requires PHP`, WordPress dejaba instalar el plugin en PHP viejo y el fatal
+  tumbaba el sitio entero.
+
+### Filtros disponibles
+
+| Filtro | Default | Qué hace |
+|--------|---------|----------|
+| `e3a_enrollment_post_type` | `tutor_enrolled` | Post type de las inscripciones |
+| `e3a_max_custom_range_days` | `3650` | Tope del rango personalizado, en días |
+| `e3a_label_date_format` | `j M Y` | Formato de las etiquetas legibles |
+| `e3a_export_excel` | — | Habilita el export del dashboard |
+| `e3a_export_country_users` | — | Habilita el export de usuarios por país |
+
+### Formato de `period_key`
+
+`7` | `30` | `90` | `365` | `this_month` | `last_month` | `this_quarter` |
+`this_year` | `last_year` | `all` | `YYYY-MM-DD..YYYY-MM-DD`
+
+El rango personalizado se guarda **ya normalizado**: si se recortó por el tope o
+porque la fecha final era futura, la clave refleja el rango efectivo. Cualquier
+otro valor cae a `30` e informa el motivo en la clave `notice`.
+
+### Pendientes conocidos, NO corregidos
+
+Ninguno de estos se tocó en este ciclo. Quedan documentados para la próxima tanda.
+
+1. **`ExportService.php:259` — `GROUP BY` inválido.** Selecciona `post_parent` y
+   `post_date` agrupando solo por `post_author`. **Devuelve datos silenciosamente
+   incorrectos**: este sitio no tiene `ONLY_FULL_GROUP_BY` en su `sql_mode`, así
+   que MySQL elige una fila arbitraria en lugar de fallar. En un servidor con la
+   configuración por defecto de MySQL 5.7+, el export `first_time_enrollments`
+   directamente falla con error 1055.
+2. **Fuga de usermeta en los export.** `ExportService::user_full_row()`,
+   `maybe_add_user_meta_sheet()` y `CountryUsersExportService::flatten_user_meta_json()`
+   vuelcan `get_user_meta()` completo, sin allowlist. Puede incluir tokens de
+   sesión, secretos de 2FA y claves de otros plugins, en un archivo que sale del
+   servidor.
+3. **Semántica de la retención.** Las ventanas están ancladas a "ahora" con techo
+   de 365 días, así que las tasas de dos períodos distintos no son comparables.
+   Hoy solo está etiquetado en la interfaz.
+4. **N+1 en la detección de completación.** `is_course_completed()` y
+   `course_progress_percent()` se llaman por cada par curso-usuario. `period=all`
+   son ~7.000 queries y 2,8 s.
+5. **Repositorios sin `LIMIT`.** `EnrollmentsRepository::rows_between()` y
+   `first_enrollment_map_until()` cargan todo en memoria, y `Xlsx::sheet_xml()`
+   arma el XML completo como string antes de escribirlo.
+
+### Limitación conocida
+
+Los presets relativos (`this_month`, `this_quarter`, `this_year`, `all`) se
+resuelven contra "hoy". Un export disparado después de que la pantalla se
+renderizó, cruzando la medianoche, resuelve una ventana distinta a la mostrada.
+Está mitigado: el rango efectivo va en el nombre del archivo y en la fila `Rango`
+de la hoja Resumen.
+
 ## 1.3.0-b3
 
 ### Selector de período con rango personalizado

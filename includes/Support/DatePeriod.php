@@ -6,30 +6,28 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * Resolución de períodos.
  *
- * Tres modos, resueltos en un único lugar (self::resolve_mode()):
+ * Traduce la clave 'period' del request a la ventana de fechas que consumen los
+ * servicios. Días calendario completos, con los límites en hora local del sitio
+ * y su equivalente en UTC.
  *
- *   'legacy'        Comportamiento histórico: ventanas rodantes ancladas a la
- *                   hora actual. DEFAULT. La matemática de fechas de esta rama
- *                   NO se toca: es la referencia contra la que se compara
- *                   tests/harness/baseline-presets.txt.
- *   'calendar'      Días calendario completos, límites en hora local del sitio.
- *   'calendar_utc'  Igual que 'calendar', y además expone las claves _utc
- *                   convertidas a UTC para las columnas que WP guarda en UTC
- *                   (wp_users.user_registered).
+ * Claves aceptadas:
+ *   '7' | '30' | '90' | '365'                     N días calendario incluyendo hoy
+ *   'this_month' | 'last_month'                   unidad de mes
+ *   'this_quarter' | 'this_year' | 'last_year'    trimestre y año
+ *   'all'                                          desde MIN(post_date) hasta hoy
+ *   'YYYY-MM-DD..YYYY-MM-DD'                       rango personalizado
  *
- * Precedencia del modo: constante E3A_DATE_MODE -> opción e3a_date_mode ->
- * 'legacy'. Valor no reconocido -> 'legacy'.
+ * Cualquier otro valor cae a '30' e informa el motivo en la clave 'notice'.
  *
- * Contrato: SOLO ADITIVO. Las 7 claves originales (period_key, is_all,
- * period_int, current_start, current_end, prev_start, prev_end) conservan
- * nombre y tipo. Todo lo demás es nuevo y en modo legacy es inocuo por
- * construcción (las _utc son copia literal de sus equivalentes locales).
+ * DOS ZONAS HORARIAS. current_start / current_end y sus prev_* están en hora
+ * local del sitio y se comparan contra wp_posts.post_date. Las cuatro claves
+ * _utc son los mismos instantes convertidos a UTC y se comparan contra
+ * wp_users.user_registered, que WP core escribe en UTC. No son intercambiables:
+ * con offset -5, el fin de un día local cae en el día UTC siguiente.
+ *
+ * No lee $_GET: Admin\Page::read_period() es el único lector del request.
  */
 final class DatePeriod {
-
-	const MODE_LEGACY       = 'legacy';
-	const MODE_CALENDAR     = 'calendar';
-	const MODE_CALENDAR_UTC = 'calendar_utc';
 
 	/** Presets numéricos + histórico. */
 	const NUMERIC_PRESETS = array( '7', '30', '90', '365' );
@@ -106,198 +104,46 @@ final class DatePeriod {
 	}
 
 	/**
-	 * Modos válidos.
-	 *
-	 * @return string[]
-	 */
-	public static function modes() {
-		return array( self::MODE_LEGACY, self::MODE_CALENDAR, self::MODE_CALENDAR_UTC );
-	}
-
-	/**
-	 * Etiquetas para el <select> de Configuración. Temporal: se borra en B2.
-	 *
-	 * @return array<string,string>
-	 */
-	public static function mode_labels() {
-		return array(
-			self::MODE_LEGACY       => 'Legacy — ventanas rodantes ancladas a la hora actual (comportamiento actual)',
-			self::MODE_CALENDAR     => 'Calendario — días completos, límites en hora local',
-			self::MODE_CALENDAR_UTC => 'Calendario + UTC — días completos, límites UTC para los registros de usuario',
-		);
-	}
-
-	/**
-	 * Resuelve el modo activo.
-	 *
-	 * El filtro e3a_date_mode se aplica en CADA llamada, a propósito y sin
-	 * memoizar: la herramienta de diagnóstico necesita calcular los tres modos
-	 * dentro de un mismo request, y con memoización el segundo add_filter() no
-	 * tendría efecto.
-	 *
-	 * @return string
-	 */
-	public static function resolve_mode() {
-		$mode = '';
-
-		if ( defined( 'E3A_DATE_MODE' ) ) {
-			$mode = (string) E3A_DATE_MODE;
-		}
-
-		if ( '' === $mode ) {
-			$mode = (string) get_option( 'e3a_date_mode', '' );
-		}
-
-		if ( ! in_array( $mode, self::modes(), true ) ) {
-			$mode = self::MODE_LEGACY;
-		}
-
-		$mode = (string) apply_filters( 'e3a_date_mode', $mode );
-
-		if ( ! in_array( $mode, self::modes(), true ) ) {
-			$mode = self::MODE_LEGACY;
-		}
-
-		return $mode;
-	}
-
-	/**
 	 * @param string|int|null $period_override 7|30|90|365|all|this_month|last_month|
 	 *                                         this_quarter|this_year|last_year|
 	 *                                         YYYY-MM-DD..YYYY-MM-DD
 	 * @return array
 	 */
 	public static function resolve( $period_override = null ) {
-		$mode = self::resolve_mode();
-
 		$raw = null;
 		if ( null !== $period_override && $period_override !== '' ) {
 			$raw = sanitize_text_field( (string) $period_override );
 		}
 
-		/*
-		 * Sin fallback a $_GET. Admin\Page es el único lector del request y
-		 * compone el escalar 'period' en un solo lugar (Page::read_period()).
-		 * Un solo punto de lectura por request: si acá volviera a leerse la
-		 * superglobal, un servicio invocado con un período explícito podría
-		 * quedar resolviendo otro distinto según la URL.
-		 */
 		if ( null === $raw || '' === $raw ) {
 			$raw = '30';
 		}
 
-		if ( self::MODE_LEGACY === $mode ) {
-			return self::resolve_legacy( (string) $raw );
-		}
-
-		return self::resolve_calendar( (string) $raw, $mode );
+		return self::resolve_calendar( (string) $raw );
 	}
 
 	// -----------------------------------------------------------------------
-	// Modo legacy
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Rama histórica. Las expresiones de fecha son las originales, carácter por
-	 * carácter: current_time('timestamp') + date_i18n() + strtotime(). No se
-	 * migran a DateTimeImmutable porque el requisito es byte-identidad con el
-	 * baseline, y "daría lo mismo" no es "es lo mismo".
-	 *
-	 * En legacy no existen ni los presets calendario ni los rangos custom:
-	 * caen al default de 30 días y lo informan por 'notice'.
-	 *
-	 * @param string $raw
-	 * @return array
-	 */
-	private static function resolve_legacy( $raw ) {
-		$notice = '';
-		$valid  = array_merge( self::NUMERIC_PRESETS, array( 'all' ) );
-		$period = $raw;
-
-		if ( ! in_array( $period, $valid, true ) ) {
-			$notice = sprintf(
-				'El período "%s" no está disponible en modo legacy. Se usaron los últimos 30 días.',
-				$raw
-			);
-			$period = '30';
-		}
-
-		if ( 'all' === $period ) {
-			$now = current_time( 'timestamp' );
-
-			$min = self::min_enrollment_date();
-
-			$current_end   = date_i18n( 'Y-m-d H:i:s', $now );
-			$current_start = $min ? (string) $min : date_i18n( 'Y-m-d H:i:s', strtotime( '-3650 days', $now ) );
-
-			return self::payload(
-				array(
-					'period_key'    => 'all',
-					'is_all'        => true,
-					'period_int'    => 0,
-					'current_start' => $current_start,
-					'current_end'   => $current_end,
-					'prev_start'    => '',
-					'prev_end'      => '',
-					'mode'          => self::MODE_LEGACY,
-					'days'          => self::span_days( $current_start, $current_end ),
-					'is_custom'     => false,
-					'preset_key'    => 'all',
-					'notice'        => $notice,
-				)
-			);
-		}
-
-		$period_int = (int) $period;
-		$now        = current_time( 'timestamp' );
-
-		$current_end   = date_i18n( 'Y-m-d H:i:s', $now );
-		$current_start = date_i18n( 'Y-m-d H:i:s', strtotime( "-{$period_int} days", $now ) );
-
-		$prev_end   = date_i18n( 'Y-m-d H:i:s', strtotime( "-{$period_int} days", $now ) );
-		$prev_start = date_i18n( 'Y-m-d H:i:s', strtotime( '-' . ( 2 * $period_int ) . ' days', $now ) );
-
-		return self::payload(
-			array(
-				'period_key'    => (string) $period,
-				'is_all'        => false,
-				'period_int'    => $period_int,
-				'current_start' => $current_start,
-				'current_end'   => $current_end,
-				'prev_start'    => $prev_start,
-				'prev_end'      => $prev_end,
-				'mode'          => self::MODE_LEGACY,
-				'days'          => $period_int,
-				'is_custom'     => false,
-				'preset_key'    => (string) $period,
-				'notice'        => $notice,
-			)
-		);
-	}
-
-	// -----------------------------------------------------------------------
-	// Modos calendario
+	// Resolución
 	// -----------------------------------------------------------------------
 
 	/**
 	 * @param string $raw
-	 * @param string $mode
 	 * @return array
 	 */
-	private static function resolve_calendar( $raw, $mode ) {
+	private static function resolve_calendar( $raw ) {
 		$tz    = wp_timezone();
 		$today = self::today( $tz );
 
 		// 1) Rango custom explícito.
 		if ( false !== strpos( $raw, '..' ) ) {
-			return self::resolve_custom( $raw, $mode, $tz, $today );
+			return self::resolve_custom( $raw, $tz, $today );
 		}
 
 		// 2) Presets de unidad calendario.
 		// resolve_calendar_preset() devuelve la ventana cruda (con objetos
 		// DateTimeImmutable): tiene que pasar por build() igual que las demás.
 		if ( in_array( $raw, self::CALENDAR_PRESETS, true ) ) {
-			return self::build( self::resolve_calendar_preset( $raw, $mode, $tz, $today ) );
+			return self::build( self::resolve_calendar_preset( $raw, $tz, $today ) );
 		}
 
 		// 3) Histórico.
@@ -323,7 +169,6 @@ final class DatePeriod {
 					'end'        => $today->setTime( 23, 59, 59 ),
 					'prev_start' => null,
 					'prev_end'   => null,
-					'mode'       => $mode,
 					'notice'     => '',
 				)
 			);
@@ -331,7 +176,7 @@ final class DatePeriod {
 
 		// 4) Presets numéricos: N días calendario incluyendo hoy.
 		if ( in_array( $raw, self::NUMERIC_PRESETS, true ) ) {
-			return self::build( self::numeric_window( (int) $raw, $raw, $mode, $today ) );
+			return self::build( self::numeric_window( (int) $raw, $raw, $today ) );
 		}
 
 		// 5) Fallback.
@@ -340,7 +185,7 @@ final class DatePeriod {
 			$raw
 		);
 
-		$window           = self::numeric_window( 30, '30', $mode, $today );
+		$window           = self::numeric_window( 30, '30', $today );
 		$window['notice'] = $notice;
 
 		return self::build( $window );
@@ -352,11 +197,10 @@ final class DatePeriod {
 	 *
 	 * @param int                $n
 	 * @param string             $key
-	 * @param string             $mode
 	 * @param \DateTimeImmutable $today
 	 * @return array
 	 */
-	private static function numeric_window( $n, $key, $mode, \DateTimeImmutable $today ) {
+	private static function numeric_window( $n, $key, \DateTimeImmutable $today ) {
 		$n = max( 1, (int) $n );
 
 		$current_start = $today->sub( new \DateInterval( 'P' . ( $n - 1 ) . 'D' ) )->setTime( 0, 0, 0 );
@@ -376,7 +220,6 @@ final class DatePeriod {
 			'end'        => $current_end,
 			'prev_start' => $prev_start,
 			'prev_end'   => $prev_end,
-			'mode'       => $mode,
 			'notice'     => '',
 		);
 	}
@@ -391,12 +234,11 @@ final class DatePeriod {
 	 * anterior (si hoy es 12 de julio, 1–12 jul compara contra 1–12 jun).
 	 *
 	 * @param string             $key
-	 * @param string             $mode
 	 * @param \DateTimeZone      $tz
 	 * @param \DateTimeImmutable $today
 	 * @return array
 	 */
-	private static function resolve_calendar_preset( $key, $mode, \DateTimeZone $tz, \DateTimeImmutable $today ) {
+	private static function resolve_calendar_preset( $key, \DateTimeZone $tz, \DateTimeImmutable $today ) {
 		$year  = (int) $today->format( 'Y' );
 		$month = (int) $today->format( 'n' );
 
@@ -404,25 +246,25 @@ final class DatePeriod {
 			case 'this_month':
 				$unit_start      = self::ymd( $year, $month, 1, $tz );
 				$prev_unit_start = $unit_start->sub( new \DateInterval( 'P1M' ) );
-				return self::period_to_date( $key, $mode, $unit_start, $today, $prev_unit_start );
+				return self::period_to_date( $key, $unit_start, $today, $prev_unit_start );
 
 			case 'last_month':
 				$unit_start = self::ymd( $year, $month, 1, $tz )->sub( new \DateInterval( 'P1M' ) );
 				$unit_end   = $unit_start->add( new \DateInterval( 'P1M' ) )->sub( new \DateInterval( 'P1D' ) );
 				$prev_start = $unit_start->sub( new \DateInterval( 'P1M' ) );
 				$prev_end   = $unit_start->sub( new \DateInterval( 'P1D' ) );
-				return self::full_unit( $key, $mode, $unit_start, $unit_end, $prev_start, $prev_end );
+				return self::full_unit( $key, $unit_start, $unit_end, $prev_start, $prev_end );
 
 			case 'this_quarter':
 				$q_month         = ( (int) floor( ( $month - 1 ) / 3 ) * 3 ) + 1;
 				$unit_start      = self::ymd( $year, $q_month, 1, $tz );
 				$prev_unit_start = $unit_start->sub( new \DateInterval( 'P3M' ) );
-				return self::period_to_date( $key, $mode, $unit_start, $today, $prev_unit_start );
+				return self::period_to_date( $key, $unit_start, $today, $prev_unit_start );
 
 			case 'this_year':
 				$unit_start      = self::ymd( $year, 1, 1, $tz );
 				$prev_unit_start = self::ymd( $year - 1, 1, 1, $tz );
-				return self::period_to_date( $key, $mode, $unit_start, $today, $prev_unit_start );
+				return self::period_to_date( $key, $unit_start, $today, $prev_unit_start );
 
 			case 'last_year':
 			default:
@@ -430,7 +272,7 @@ final class DatePeriod {
 				$unit_end   = self::ymd( $year - 1, 12, 31, $tz );
 				$prev_start = self::ymd( $year - 2, 1, 1, $tz );
 				$prev_end   = self::ymd( $year - 2, 12, 31, $tz );
-				return self::full_unit( $key, $mode, $unit_start, $unit_end, $prev_start, $prev_end );
+				return self::full_unit( $key, $unit_start, $unit_end, $prev_start, $prev_end );
 		}
 	}
 
@@ -440,7 +282,7 @@ final class DatePeriod {
 	 *
 	 * @return array
 	 */
-	private static function period_to_date( $key, $mode, \DateTimeImmutable $unit_start, \DateTimeImmutable $today, \DateTimeImmutable $prev_unit_start ) {
+	private static function period_to_date( $key, \DateTimeImmutable $unit_start, \DateTimeImmutable $today, \DateTimeImmutable $prev_unit_start ) {
 		$start = $unit_start->setTime( 0, 0, 0 );
 		$end   = $today->setTime( 23, 59, 59 );
 
@@ -459,7 +301,6 @@ final class DatePeriod {
 			'end'        => $end,
 			'prev_start' => $prev_start,
 			'prev_end'   => $prev_end,
-			'mode'       => $mode,
 			'notice'     => '',
 		);
 	}
@@ -469,7 +310,7 @@ final class DatePeriod {
 	 *
 	 * @return array
 	 */
-	private static function full_unit( $key, $mode, \DateTimeImmutable $start, \DateTimeImmutable $end, \DateTimeImmutable $prev_start, \DateTimeImmutable $prev_end ) {
+	private static function full_unit( $key, \DateTimeImmutable $start, \DateTimeImmutable $end, \DateTimeImmutable $prev_start, \DateTimeImmutable $prev_end ) {
 		$start = $start->setTime( 0, 0, 0 );
 		$end   = $end->setTime( 23, 59, 59 );
 
@@ -483,7 +324,6 @@ final class DatePeriod {
 			'end'        => $end,
 			'prev_start' => $prev_start->setTime( 0, 0, 0 ),
 			'prev_end'   => $prev_end->setTime( 23, 59, 59 ),
-			'mode'       => $mode,
 			'notice'     => '',
 		);
 	}
@@ -503,11 +343,11 @@ final class DatePeriod {
 	 *
 	 * @return array
 	 */
-	private static function resolve_custom( $raw, $mode, \DateTimeZone $tz, \DateTimeImmutable $today ) {
+	private static function resolve_custom( $raw, \DateTimeZone $tz, \DateTimeImmutable $today ) {
 		$parts = explode( '..', $raw );
 
 		if ( 2 !== count( $parts ) ) {
-			return self::custom_rejected( $raw, $mode, $today, 'el formato debe ser AAAA-MM-DD..AAAA-MM-DD' );
+			return self::custom_rejected( $raw, $today, 'el formato debe ser AAAA-MM-DD..AAAA-MM-DD' );
 		}
 
 		$from = self::parse_ymd( trim( $parts[0] ), $tz );
@@ -515,7 +355,7 @@ final class DatePeriod {
 
 		if ( null === $from || null === $to ) {
 			$bad = ( null === $from ) ? trim( $parts[0] ) : trim( $parts[1] );
-			return self::custom_rejected( $raw, $mode, $today, sprintf( 'la fecha "%s" no existe o no tiene el formato AAAA-MM-DD', $bad ) );
+			return self::custom_rejected( $raw, $today, sprintf( 'la fecha "%s" no existe o no tiene el formato AAAA-MM-DD', $bad ) );
 		}
 
 		$notices = array();
@@ -574,7 +414,6 @@ final class DatePeriod {
 				'end'        => $end,
 				'prev_start' => $prev_start,
 				'prev_end'   => $prev_end,
-				'mode'       => $mode,
 				'notice'     => implode( ' ', $notices ),
 			)
 		);
@@ -585,8 +424,8 @@ final class DatePeriod {
 	 *
 	 * @return array
 	 */
-	private static function custom_rejected( $raw, $mode, \DateTimeImmutable $today, $reason ) {
-		$window           = self::numeric_window( 30, '30', $mode, $today );
+	private static function custom_rejected( $raw, \DateTimeImmutable $today, $reason ) {
+		$window           = self::numeric_window( 30, '30', $today );
 		$window['notice'] = sprintf(
 			'El rango "%s" no es válido: %s. Se usaron los últimos 30 días.',
 			$raw,
@@ -648,9 +487,6 @@ final class DatePeriod {
 	 * @return array
 	 */
 	private static function build( array $w ) {
-		$mode = (string) $w['mode'];
-		$utc  = ( self::MODE_CALENDAR_UTC === $mode );
-
 		$start = $w['start'];
 		$end   = $w['end'];
 		$ps    = $w['prev_start'];
@@ -664,11 +500,13 @@ final class DatePeriod {
 			'current_end'       => self::fmt_local( $end ),
 			'prev_start'        => self::fmt_local( $ps ),
 			'prev_end'          => self::fmt_local( $pe ),
-			'current_start_utc' => $utc ? self::fmt_utc( $start ) : self::fmt_local( $start ),
-			'current_end_utc'   => $utc ? self::fmt_utc( $end ) : self::fmt_local( $end ),
-			'prev_start_utc'    => $utc ? self::fmt_utc( $ps ) : self::fmt_local( $ps ),
-			'prev_end_utc'      => $utc ? self::fmt_utc( $pe ) : self::fmt_local( $pe ),
-			'mode'              => $mode,
+			// Los mismos instantes en UTC. Los consumen las 6 queries contra
+			// wp_users.user_registered. NO son copia de las locales: con offset -5
+			// el fin de un día local cae en el día UTC siguiente.
+			'current_start_utc' => self::fmt_utc( $start ),
+			'current_end_utc'   => self::fmt_utc( $end ),
+			'prev_start_utc'    => self::fmt_utc( $ps ),
+			'prev_end_utc'      => self::fmt_utc( $pe ),
 			// days = duración real siempre. period_int conserva el 0 de 'all'
 			// por compatibilidad con los consumidores existentes.
 			'days'              => self::days_between( $start, $end ),
@@ -680,44 +518,6 @@ final class DatePeriod {
 		);
 
 		return $fields;
-	}
-
-	/**
-	 * Construye el payload desde literales ya formateados (rama legacy).
-	 *
-	 * En legacy las claves _utc son copia literal de las locales: la rama no
-	 * hace ninguna conversión de zona, y así las 6 queries que leen _utc siguen
-	 * comparando exactamente lo mismo que antes.
-	 *
-	 * @param array $f
-	 * @return array
-	 */
-	private static function payload( array $f ) {
-		$current_start = (string) $f['current_start'];
-		$current_end   = (string) $f['current_end'];
-		$prev_start    = (string) $f['prev_start'];
-		$prev_end      = (string) $f['prev_end'];
-
-		return array(
-			'period_key'        => (string) $f['period_key'],
-			'is_all'            => (bool) $f['is_all'],
-			'period_int'        => (int) $f['period_int'],
-			'current_start'     => $current_start,
-			'current_end'       => $current_end,
-			'prev_start'        => $prev_start,
-			'prev_end'          => $prev_end,
-			'current_start_utc' => $current_start,
-			'current_end_utc'   => $current_end,
-			'prev_start_utc'    => $prev_start,
-			'prev_end_utc'      => $prev_end,
-			'mode'              => (string) $f['mode'],
-			'days'              => (int) $f['days'],
-			'is_custom'         => (bool) $f['is_custom'],
-			'preset_key'        => (string) $f['preset_key'],
-			'notice'            => (string) $f['notice'],
-			'label'             => self::label_from_mysql( $current_start, $current_end ),
-			'prev_label'        => self::label_from_mysql( $prev_start, $prev_end ),
-		);
 	}
 
 	// -----------------------------------------------------------------------
@@ -832,24 +632,7 @@ final class DatePeriod {
 	}
 
 	/**
-	 * Span en días entre dos literales MySQL. Solo para la rama legacy, donde
-	 * los límites no caen en medianoche.
-	 *
-	 * @return int
-	 */
-	private static function span_days( $start, $end ) {
-		$a = strtotime( (string) $start );
-		$b = strtotime( (string) $end );
-
-		if ( false === $a || false === $b || $b < $a ) {
-			return 0;
-		}
-
-		return (int) floor( ( $b - $a ) / DAY_IN_SECONDS ) + 1;
-	}
-
-	/**
-	 * Etiqueta legible del rango, con el formato de fecha del sitio.
+	 * Etiqueta legible del rango, con el formato explícito de label_date_format().
 	 *
 	 * date_i18n() espera un "timestamp con offset", que es la convención
 	 * histórica de WP: epoch real más el offset de la zona.
@@ -871,31 +654,4 @@ final class DatePeriod {
 		return ( $a === $b ) ? (string) $a : $a . ' – ' . $b;
 	}
 
-	/**
-	 * Igual que range_label(), partiendo de literales MySQL en hora local.
-	 *
-	 * @return string
-	 */
-	private static function label_from_mysql( $start, $end ) {
-		$start = (string) $start;
-		$end   = (string) $end;
-
-		if ( '' === $start || '' === $end ) {
-			return '';
-		}
-
-		$format = self::label_date_format();
-
-		$a_ts = strtotime( $start );
-		$b_ts = strtotime( $end );
-
-		if ( false === $a_ts || false === $b_ts ) {
-			return '';
-		}
-
-		$a = date_i18n( $format, $a_ts );
-		$b = date_i18n( $format, $b_ts );
-
-		return ( $a === $b ) ? (string) $a : $a . ' – ' . $b;
-	}
 }

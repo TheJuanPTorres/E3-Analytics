@@ -6,7 +6,6 @@ use E3_Analytics\Services\DropoutProgressService;
 use E3_Analytics\Services\CountryAnalyticsService;
 use E3_Analytics\Services\ExportService;
 use E3_Analytics\Support\Xlsx;
-use E3_Analytics\Settings;
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
@@ -14,7 +13,6 @@ final class Page {
     private $slug_dashboard = 'e3-analytics-dashboard';
     private $slug_dropout   = 'e3-analytics-dropout-progress';
     private $slug_country   = 'e3-analytics-country-analysis';
-    private $slug_settings  = 'e3-analytics-settings';
 
     public function hooks() {
         add_action( 'admin_menu', [ $this, 'register_menu' ] );
@@ -23,7 +21,6 @@ final class Page {
         add_action( 'admin_post_e3a_export_dropout_users', [ $this, 'export_dropout_users' ] );
         add_action( 'admin_post_e3a_export_excel', [ $this, 'export_excel' ] );
         add_action( 'admin_post_e3a_export_country_users', [ $this, 'export_country_users' ] );
-        add_action( 'admin_post_e3a_save_settings', [ $this, 'save_settings' ] );
     }
 
     /**
@@ -96,38 +93,13 @@ final class Page {
             [ $this, 'render_country' ]
         );
 
-        /*
-         * @deprecated CANDADO DE LIMPIEZA — eliminar al cerrar B2.
-         *
-         * Este submenú se elimina EN EL MISMO COMMIT que borra el bloque
-         * "Avanzado — temporal" de admin/views/settings.php. Cuando se quite la
-         * sección de quizzes de retroalimentación, la página de Configuración
-         * queda solo con ese bloque temporal; al borrarlo también, queda vacía.
-         *
-         * Se eliminan juntos, en un solo commit:
-         *   - este add_submenu_page()
-         *   - Page::render_settings()
-         *   - Page::save_settings()
-         *   - el add_action( 'admin_post_e3a_save_settings' ) de Page::hooks()
-         *   - admin/views/settings.php
-         *
-         * Decisión tomada: mantener el submenú hasta entonces (opción 1).
-         */
-        add_submenu_page(
-            $this->slug_dashboard,
-            'Configuración',
-            'Configuración',
-            'manage_options',
-            $this->slug_settings,
-            [ $this, 'render_settings' ]
-        );
     }
 
     public function enqueue_assets( $hook ) {
         if ( empty( $_GET['page'] ) ) return;
 
         $page = sanitize_text_field( wp_unslash( $_GET['page'] ) );
-        $plugin_pages = [ $this->slug_dashboard, $this->slug_dropout, $this->slug_country, $this->slug_settings ];
+        $plugin_pages = [ $this->slug_dashboard, $this->slug_dropout, $this->slug_country ];
         if ( ! in_array( $page, $plugin_pages, true ) ) return;
 
         wp_enqueue_style(
@@ -169,13 +141,6 @@ final class Page {
     public function render_dashboard() {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( __( 'No tienes permisos suficientes para ver esta página.', 'e3-analytics' ) );
-        }
-
-        // TEMPORAL etapa B1: herramienta de diagnóstico. Borrar al cerrar B2.
-        // Si la guarda no se cumple, maybe_render() devuelve false y sigue el
-        // dashboard normal: el parámetro se ignora por completo.
-        if ( Diagnostics::maybe_render() ) {
-            return;
         }
 
         $period = $this->read_period();
@@ -381,85 +346,6 @@ final class Page {
         }
 
         fclose( $out );
-        exit;
-    }
-
-    /**
-     * @deprecated CANDADO DE LIMPIEZA — eliminar al cerrar B2.
-     *
-     * Se elimina en el MISMO COMMIT que borra el bloque "Avanzado — temporal"
-     * de admin/views/settings.php, junto con el registro del submenú de
-     * Configuración (ver register_menu()) y save_settings().
-     */
-    public function render_settings() {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( __( 'No tienes permisos suficientes para ver esta página.', 'e3-analytics' ) );
-        }
-
-        $notice      = '';
-        $notice_type = 'success';
-
-        if ( isset( $_GET['e3a_saved'] ) ) {
-            $notice = $_GET['e3a_saved'] === '1'
-                ? 'Configuración guardada correctamente.'
-                : 'Error al guardar la configuración. Inténtalo de nuevo.';
-            $notice_type = $_GET['e3a_saved'] === '1' ? 'success' : 'error';
-        }
-
-        // TEMPORAL etapa B1: bloque "Avanzado". Borrar las 4 líneas al cerrar B2.
-        $date_mode      = Settings::get_date_mode();
-        $date_mode_eff  = \E3_Analytics\Support\DatePeriod::resolve_mode();
-        $date_modes     = \E3_Analytics\Support\DatePeriod::mode_labels();
-        $diag_enabled   = Settings::is_diag_enabled();
-
-        require E3A_PATH . 'admin/views/settings.php';
-    }
-
-    /**
-     * @deprecated CANDADO DE LIMPIEZA — eliminar al cerrar B2.
-     *
-     * Se elimina en el MISMO COMMIT que borra el bloque "Avanzado — temporal"
-     * de admin/views/settings.php, junto con el registro del submenú de
-     * Configuración (ver register_menu()) y render_settings(). Acordarse de
-     * quitar también el add_action( 'admin_post_e3a_save_settings' ) de hooks().
-     */
-    public function save_settings() {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( __( 'No tienes permisos suficientes para realizar esta acción.', 'e3-analytics' ) );
-        }
-
-        $nonce = isset( $_POST['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ) : '';
-        if ( ! wp_verify_nonce( $nonce, 'e3a_save_settings' ) ) {
-            wp_die( __( 'Nonce inválido. Recarga la página e intenta de nuevo.', 'e3-analytics' ) );
-        }
-
-        /*
-         * La ramificación por sección quedó de cuando la página tenía dos
-         * formularios. Hoy solo queda el de "Avanzado", que manda
-         * e3a_section=advanced explícito.
-         *
-         * El default es 'advanced' a propósito: si quedara en el valor histórico
-         * 'quizzes', un POST sin el campo no entraría a ninguna rama, no
-         * guardaría nada y aun así redirigiría con e3a_saved=1. Guardar en
-         * silencio sin guardar es el peor modo de fallar.
-         */
-        $section = isset( $_POST['e3a_section'] )
-            ? sanitize_text_field( wp_unslash( $_POST['e3a_section'] ) )
-            : 'advanced';
-
-        // TEMPORAL etapa B1: borrar este bloque al cerrar B2.
-        if ( 'advanced' === $section ) {
-            $mode = isset( $_POST['e3a_date_mode'] ) ? sanitize_text_field( wp_unslash( $_POST['e3a_date_mode'] ) ) : '';
-            if ( '' !== $mode ) {
-                Settings::save_date_mode( $mode );
-            }
-            Settings::save_diag_enabled( ! empty( $_POST['e3a_diag_enabled'] ) );
-        }
-
-        wp_redirect( add_query_arg(
-            [ 'page' => $this->slug_settings, 'e3a_saved' => '1' ],
-            admin_url( 'admin.php' )
-        ) );
         exit;
     }
 }

@@ -1,7 +1,7 @@
 # E3 Analytics Dashboard
 ## Documentación Técnica — Entrega al Cliente
 
-**Versión del plugin:** 1.2.9.2-b1
+**Versión del plugin:** 1.3.0
 **Plataforma:** WordPress + Tutor LMS
 **Autor:** Juan Pablo Torres
 **Fecha del documento:** Abril 2026
@@ -16,7 +16,6 @@
    - 3.1 [Panel principal (Dashboard)](#31-panel-principal-dashboard)
    - 3.2 [Avance en abandono](#32-avance-en-abandono)
    - 3.3 [Análisis por país](#33-análisis-por-país)
-   - 3.4 [Configuración](#34-configuración)
 4. [Definición y fórmulas de KPIs](#4-definición-y-fórmulas-de-kpis)
    - 4.1 [KPIs del Dashboard principal](#41-kpis-del-dashboard-principal) (KPI-01 al KPI-11)
    - 4.2 [Indicador de Salud LMS](#42-indicador-de-salud-lms)
@@ -53,9 +52,22 @@ El sistema está compuesto por cuatro páginas de administración accesibles des
 | **Dashboard** | Métricas generales del período: registros, inscripciones, finalización, retención y actividad |
 | **Avance en abandono** | Estudiantes que no completaron sus cursos, clasificados por rango de progreso |
 | **Análisis por país** | Distribución geográfica de registros, inscripciones y completaciones |
-| **Configuración** | Controles temporales de la etapa B1: modo de fecha y activador del diagnóstico |
 
-Cada módulo dispone de un **selector de período** (7, 30, 90 o 365 días, o histórico completo) y la mayoría permite exportar los datos directamente desde la interfaz.
+
+Cada módulo dispone de un **selector de período** con diez presets y un rango personalizado, y la mayoría permite exportar los datos directamente desde la interfaz.
+
+| Preset | Significado |
+|--------|-------------|
+| Últimos 7 / 30 / 90 / 365 días | N días calendario terminando hoy |
+| Este mes / Mes pasado | Unidad de mes calendario |
+| Este trimestre | Trimestre en curso, a la fecha |
+| Este año / Año pasado | Unidad de año calendario |
+| Histórico completo | Desde la primera inscripción registrada |
+| **Rango personalizado** | Dos fechas elegidas por el usuario, hasta 3.650 días |
+
+Los presets "Este mes", "Este trimestre" y "Este año" se comparan contra el mismo número de días transcurridos de la unidad anterior: si hoy es 12 de julio, "este mes" (1–12 jul) compara contra 1–12 jun, no contra todo junio.
+
+**El último día del período está en curso**, así que sus datos son parciales. La interfaz lo indica.
 
 ---
 
@@ -194,14 +206,7 @@ Disponible mediante el botón **"Descargar usuarios (Excel)"**. Genera un archiv
 
 ### 3.4 Configuración
 
-Hasta la versión 1.2.9.1-b1 esta página gestionaba los **quizzes de retroalimentación**. Esa funcionalidad se eliminó (ver sección 7): la regla de completación actual es que un curso al 100% de progreso cuenta como completado.
-
-Hoy la página contiene únicamente el bloque **"Avanzado — temporal"** de la etapa B1, con dos controles de transición:
-
-- **Modo de resolución de fechas** — `legacy` (ventanas rodantes ancladas a la hora actual, comportamiento histórico), `calendar` (días completos en hora local) o `calendar_utc` (días completos con los límites convertidos a UTC para `wp_users.user_registered`).
-- **Página de diagnóstico** — habilita la herramienta de relevamiento y comparación.
-
-Ambos controles, la página y su entrada de menú se eliminan al cerrar la etapa B2.
+Eliminada en la versión 1.3.0. El plugin ya no tiene opciones configurables: todo su comportamiento se ajusta con filtros (ver sección 9).
 
 ---
 
@@ -739,7 +744,6 @@ El plugin consulta directamente las tablas de WordPress. No requiere tablas prop
 | `wp_users` | Registros de usuarios (fecha de registro) |
 | `wp_usermeta` | País (`country_lms`), logins de Tutor LMS (`tutor_login_*`) |
 | `wp_posts` | Inscripciones (`post_type = tutor_enrolled`, `post_parent = course_id`, `post_author = user_id`) |
-| `wp_options` | Configuración del plugin (`e3a_date_mode`, `e3a_diag_enabled`) |
 
 ### Estados de inscripción considerados
 
@@ -851,7 +855,6 @@ e3-analytics-dashboard/
 ├── e3-analytics-dashboard.php          Punto de entrada, constantes
 ├── includes/
 │   ├── Plugin.php                      Singleton bootstrap
-│   ├── Settings.php                    Opciones e3a_date_mode / e3a_diag_enabled
 │   ├── Admin/Page.php                  Menús, assets, enrutamiento, handlers
 │   ├── Services/
 │   │   ├── MetricsService.php          Lógica de KPIs del dashboard
@@ -879,7 +882,6 @@ e3-analytics-dashboard/
         ├── dashboard.php
         ├── dropout-progress.php
         ├── country-analysis.php
-        └── settings.php
 ```
 
 ### Flujo de datos
@@ -1008,3 +1010,42 @@ No requiere:
 
 *Documento generado para el proyecto E3 Analytics Dashboard — Abril 2026.*
 *Desarrollado por Juan Pablo Torres para la plataforma E3.*
+
+---
+
+## 13. Filtros disponibles
+
+El plugin no tiene opciones configurables desde el admin. Su comportamiento se ajusta con filtros de WordPress, desde el `functions.php` del tema o un plugin propio.
+
+| Filtro | Default | Qué controla |
+|--------|---------|--------------|
+| `e3a_enrollment_post_type` | `tutor_enrolled` | Post type que representa una inscripción |
+| `e3a_max_custom_range_days` | `3650` | Tope del rango personalizado, en días |
+| `e3a_label_date_format` | `j M Y` | Formato de las etiquetas legibles de período |
+| `e3a_export_excel` | — | Habilita el export del dashboard principal |
+| `e3a_export_country_users` | — | Habilita el export de usuarios por país |
+
+### Formato interno del período
+
+El período viaja por la aplicación como un único valor de texto:
+
+```
+7 | 30 | 90 | 365
+this_month | last_month | this_quarter | this_year | last_year
+all
+YYYY-MM-DD..YYYY-MM-DD
+```
+
+Los rangos personalizados se almacenan **ya normalizados**: si el rango se recortó por exceder el tope, o porque la fecha final era futura, el valor refleja el rango efectivamente aplicado. Cualquier valor no reconocido cae a `30` y el motivo se muestra como aviso en pantalla.
+
+---
+
+## 14. Defectos conocidos, no corregidos
+
+Documentados a propósito. Ninguno se corrigió en la versión 1.3.0.
+
+1. **Export de "primeras inscripciones" con agrupamiento inválido.** La consulta agrupa por autor pero selecciona columnas que no dependen de ese agrupamiento. En este servidor devuelve **datos silenciosamente incorrectos** (elige una fila arbitraria); en un MySQL con la configuración por defecto, el export falla con error.
+2. **Los export incluyen todos los metadatos de usuario, sin filtrar.** Pueden contener tokens de sesión, secretos de doble factor y claves de otros plugins, en un archivo que sale del servidor.
+3. **La retención usa ventanas ancladas a la fecha actual**, con techo de 365 días. Las tasas de dos períodos distintos no son comparables entre sí. Está etiquetado en la interfaz.
+4. **Detección de completación consulta una vez por par curso-usuario.** El histórico completo son unas 7.000 consultas y 2,8 segundos.
+5. **Las consultas de inscripciones no tienen límite** y el generador de Excel arma el archivo entero en memoria antes de escribirlo.

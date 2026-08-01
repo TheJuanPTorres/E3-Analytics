@@ -252,13 +252,15 @@ echo 'casos               : ' . $opts['only'] . ' (' . count( $cases ) . ")\n";
 echo 'modos               : ' . implode( ', ', $modes ) . "\n";
 echo "\n";
 echo "span = dias entre current_start y current_end.  db = consultas a \$wpdb durante resolve().\n";
-echo "La tabla de las 7 claves originales tiene formato congelado: es la referencia\n";
-echo "contra la que se verifica que el modo legacy no se movio.\n";
+echo "La tabla de las 7 claves originales tiene formato congelado: su md5 es el\n";
+echo "guard de regresion del contrato de DatePeriod (tests/harness/*.md5).\n";
 echo "\n";
 
 foreach ( $modes as $mode ) {
 
-	e3a_test_set_option( 'e3a_date_mode', $mode );
+	// El plugin ya no tiene modos: DatePeriod resuelve siempre en calendario con
+	// claves UTC. --mode se acepta por compatibilidad de invocación (y para que
+	// el md5 del baseline congelado no cambie), pero no altera el resultado.
 
 	echo str_repeat( '=', 152 ) . "\n";
 	echo 'MODO: ' . $mode . "\n";
@@ -392,7 +394,9 @@ printf( "  %-14s %-21s %-21s %s\n", 'modo', 'current_start_utc', 'current_end_ut
 echo '  ' . str_repeat( '-', 78 ) . "\n";
 
 foreach ( array( 'legacy', 'calendar', 'calendar_utc' ) as $mode ) {
-	e3a_test_set_option( 'e3a_date_mode', $mode );
+	// El plugin ya no tiene modos: DatePeriod resuelve siempre en calendario con
+	// claves UTC. --mode se acepta por compatibilidad de invocación (y para que
+	// el md5 del baseline congelado no cambie), pero no altera el resultado.
 
 	$d = e3a_resolve_case( '7' );
 
