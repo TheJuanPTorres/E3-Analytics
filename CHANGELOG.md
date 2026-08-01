@@ -1,5 +1,57 @@
 # Changelog — E3 Analytics Dashboard
 
+## 1.3.3
+
+### Columnas demográficas en el export de País
+
+Quince campos del formulario de registro, en este orden, después de "Registrado
+en el período":
+
+Género · Rango de edad · Departamento · Organización · Comunidad indígena (sí/no)
+· Nombre de la comunidad · Rol · Tipo de perfil · Tipo de perfil (otro) · Formato
+de contenido · Cómo nos conoció · Expectativas · Propósito
+
+Y dos detrás del filtro `e3a_export_include_contact_pii` (default `true`):
+**Documento de identidad** y **Teléfono**.
+
+La hoja pasa de 27 a **38 columnas** (36 con el filtro apagado).
+
+**Celdas vacías es lo correcto.** El formulario cambió con el tiempo: de ~3.446
+usuarios solo ~748 tienen `gender_lms` y ~598 `department_lms`. Un hueco
+significa "se registró antes de que el campo existiera", que es un dato. No se
+rellena con valores por defecto ni con "N/A".
+
+**Cuatro columnas se movieron, no se duplicaron.** `gender_lms`, `age_range_lms`,
+`profile_type_lms` y `profile_type_other_lms` ya existían como columnas sueltas
+con encabezado en inglés. Ahora forman parte del bloque demográfico, con
+encabezado en español y una sola columna por `meta_key`. `age_min`, `age_max` y
+`age_midpoint`, que se derivan de "Rango de edad", quedan pegadas a ella.
+
+**Cero consultas nuevas.** El batch de `usermeta` ya era una sola query por cada
+2.000 usuarios: solo se alargó su `IN`. Medido: 6 consultas antes, 6 después.
+Con el filtro de PII apagado, esas dos claves ni siquiera se leen de la base.
+
+### Contacto identificatorio detrás de un filtro
+
+Un documento de identidad y un teléfono personal identifican a la persona de
+forma directa, y este archivo **sale del servidor**: correo, WhatsApp, un Drive
+compartido. Cada copia es una fuga que ya no se controla.
+
+```php
+add_filter( 'e3a_export_include_contact_pii', '__return_false' );
+```
+
+Default `true` por decisión explícita del proyecto, no por descuido.
+
+### MetaScan: cruce `country_lms` vs `_pais`
+
+La herramienta temporal reporta ahora cuántos usuarios tiene cada sistema de
+país, cuántos comparten los dos, en cuántos coinciden los valores, el top 10 de
+cada uno y ejemplos donde difieren.
+
+Si `_pais` tiene usuarios que `country_lms` no tiene, el análisis por país los
+está perdiendo. **Este bloque solo mide: no cambia la lógica de resolución.**
+
 ## 1.3.2
 
 ### Corregido: "Recurrentes" daba 0 en todos los cursos, siempre

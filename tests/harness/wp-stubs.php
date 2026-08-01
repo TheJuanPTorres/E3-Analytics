@@ -255,8 +255,10 @@ function date_i18n( $format, $timestamp_with_offset = false, $gmt = false ) {
 /**
  * Pasa el valor sin tocarlo, como pediste.
  */
+if ( ! function_exists( 'apply_filters' ) ) {
 function apply_filters( $hook_name, $value ) {
 	return $value;
+}
 }
 
 /**

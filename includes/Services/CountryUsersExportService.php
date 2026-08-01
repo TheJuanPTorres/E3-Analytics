@@ -26,6 +26,65 @@ final class CountryUsersExportService {
     private $registered_in_period = array();
 
     /**
+     * Campos demográficos del formulario de registro.
+     *
+     * meta_key => encabezado de la columna. El orden de este array es el orden
+     * de las columnas en la hoja.
+     *
+     * Cobertura parcial a propósito: el formulario cambió con el tiempo, así que
+     * de ~3.446 usuarios solo ~748 tienen gender_lms y ~598 department_lms. Una
+     * celda vacía significa "este usuario se registró antes de que el campo
+     * existiera", que es un dato. NO rellenar con valores por defecto ni con
+     * "N/A": eso convertiría un hueco informativo en ruido.
+     */
+    const DEMOGRAPHIC_FIELDS = [
+        'gender_lms'                    => 'Género',
+        'age_range_lms'                 => 'Rango de edad',
+        'department_lms'                => 'Departamento',
+        'organization_lms'              => 'Organización',
+        'indigenous_community_lms'      => 'Comunidad indígena (sí/no)',
+        'indigenous_community_name_lms' => 'Nombre de la comunidad',
+        'role_lms'                      => 'Rol',
+        'profile_type_lms'              => 'Tipo de perfil',
+        'profile_type_other_lms'        => 'Tipo de perfil (otro)',
+        'content_format_lms'            => 'Formato de contenido',
+        'referral_source_lms'           => 'Cómo nos conoció',
+        'expectations_lms'              => 'Expectativas',
+        'purpose_lms'                   => 'Propósito',
+    ];
+
+    /**
+     * Datos de contacto identificatorios.
+     *
+     * SON PII SENSIBLE. Un documento de identidad y un teléfono personal
+     * identifican a la persona de forma directa, y este archivo SALE DEL
+     * SERVIDOR: se manda por correo, por WhatsApp, se sube a un Drive
+     * compartido. Cada copia es una fuga potencial que ya no controlamos.
+     *
+     * El filtro e3a_export_include_contact_pii permite excluirlas sin tocar
+     * código:
+     *
+     *     add_filter( 'e3a_export_include_contact_pii', '__return_false' );
+     *
+     * Default TRUE por decisión explícita del proyecto, no por descuido.
+     * Cuando estas columnas están excluidas, las claves ni siquiera se leen de
+     * la base.
+     */
+    const CONTACT_PII_FIELDS = [
+        'id_number_lms' => 'Documento de identidad',
+        'phone_lms'     => 'Teléfono',
+    ];
+
+    /**
+     * ¿Se incluyen las columnas de contacto identificatorio?
+     *
+     * @return bool
+     */
+    private function include_contact_pii() {
+        return (bool) apply_filters( 'e3a_export_include_contact_pii', true );
+    }
+
+    /**
      * @param string|int|null $period_override   7/30/90/365/all
      * @param int             $limit             0 = sin límite
      * @param bool            $include_meta_json Agrega columna meta_json con todos los usermeta
@@ -70,8 +129,10 @@ final class CountryUsersExportService {
         // ── 3. Batch: datos de país ───────────────────────────────────────
         $country_map = $this->get_country_details_for_users( $user_ids );
 
+        $include_pii = $this->include_contact_pii();
+
         // ── 4. Batch: usermeta relevante (1 query, no N*9) ────────────────
-        $meta_map = $this->get_user_meta_batch( $user_ids );
+        $meta_map = $this->get_user_meta_batch( $user_ids, $include_pii );
 
         // ── 5. Inscripciones de los usuarios (todas, no solo del período) ─
         $enrollment_map = $this->get_enrollment_map_for_users( $user_ids, $post_type );
@@ -96,15 +157,38 @@ final class CountryUsersExportService {
         $progress_map = $this->build_progress_map( $enrollment_map, $all_course_ids );
 
         // ── 8. Construir hoja "Usuarios" ──────────────────────────────────
-        $fixed_header = [
-            'user_id', 'nickname', 'first_name', 'last_name', 'display_name',
-            'user_email', 'roles', 'capabilities_json', 'description',
-            'user_registered', 'Registrado en el período', 'locale',
-            'country_resolved', 'country_source', 'country_lms_raw', 'tutor_login_country_iso2',
-            'profile_type_lms', 'profile_type_other_lms', 'gender_lms',
-            'age_range_lms', 'age_min', 'age_max', 'age_midpoint',
-            'phone', 'billing_phone', 'user_url', 'meta_json',
-        ];
+        /*
+         * Las cuatro columnas demográficas que ya existían (gender_lms,
+         * age_range_lms, profile_type_lms, profile_type_other_lms) se MUEVEN al
+         * bloque nuevo en vez de duplicarse: hay una sola columna por meta_key.
+         * age_min/age_max/age_midpoint son derivadas de "Rango de edad" y quedan
+         * pegadas a ella.
+         */
+        $demographic_header = [];
+        foreach ( self::DEMOGRAPHIC_FIELDS as $meta_key => $label ) {
+            $demographic_header[] = $label;
+
+            if ( 'age_range_lms' === $meta_key ) {
+                $demographic_header[] = 'age_min';
+                $demographic_header[] = 'age_max';
+                $demographic_header[] = 'age_midpoint';
+            }
+        }
+
+        $fixed_header = array_merge(
+            [
+                'user_id', 'nickname', 'first_name', 'last_name', 'display_name',
+                'user_email', 'roles', 'capabilities_json', 'description',
+                'user_registered', 'Registrado en el período',
+            ],
+            $demographic_header,
+            $include_pii ? array_values( self::CONTACT_PII_FIELDS ) : [],
+            [
+                'locale',
+                'country_resolved', 'country_source', 'country_lms_raw', 'tutor_login_country_iso2',
+                'phone', 'billing_phone', 'user_url', 'meta_json',
+            ]
+        );
 
         $course_header = array_values( $course_titles ); // un encabezado por curso
         $rows          = [ array_merge( $fixed_header, $course_header ) ];
@@ -114,7 +198,8 @@ final class CountryUsersExportService {
                 $uid,
                 $country_map[ $uid ] ?? null,
                 $meta_map[ $uid ] ?? [],
-                (bool) $include_meta_json
+                (bool) $include_meta_json,
+                $include_pii
             );
 
             // Columnas de avance: % si inscrito, vacío si no
@@ -160,7 +245,7 @@ final class CountryUsersExportService {
     // Fila de usuario (usa meta pre-cargada, sin get_user_meta individual)
     // ──────────────────────────────────────────────────────────────────────
 
-    private function user_row( $user_id, $country_details = null, array $meta = [], $include_meta_json = false ) {
+    private function user_row( $user_id, $country_details = null, array $meta = [], $include_meta_json = false, $include_pii = true ) {
         global $wpdb;
 
         $user_id = (int) $user_id;
@@ -170,9 +255,6 @@ final class CountryUsersExportService {
         $first                  = (string) ( $meta['first_name'] ?? '' );
         $last                   = (string) ( $meta['last_name'] ?? '' );
         $desc                   = (string) ( $meta['description'] ?? '' );
-        $profile_type_lms       = (string) ( $meta['profile_type_lms'] ?? '' );
-        $profile_type_other_lms = (string) ( $meta['profile_type_other_lms'] ?? '' );
-        $gender_lms             = (string) ( $meta['gender_lms'] ?? '' );
         $age_range_lms          = (string) ( $meta['age_range_lms'] ?? '' );
         $phone                  = (string) ( $meta['phone'] ?? '' );
         $billing_phone          = (string) ( $meta['billing_phone'] ?? '' );
@@ -205,55 +287,85 @@ final class CountryUsersExportService {
             $meta_json = $this->flatten_user_meta_json( $user_id );
         }
 
-        return [
-            $user_id,
-            $u ? (string) $u->user_login        : '',
-            $first,
-            $last,
-            $u ? (string) $u->display_name       : '',
-            $u ? (string) $u->user_email         : '',
-            $u && is_array( $u->roles ) ? implode( ',', $u->roles ) : '',
-            $caps_json,
-            $desc,
-            $u ? (string) $u->user_registered    : '',
-            // Un usuario borrado no está en el set: cae en 'no'. Correcto, se
-            // registró en algún momento del pasado, no dentro del período.
-            isset( $this->registered_in_period[ $user_id ] ) ? 'sí' : 'no',
-            $locale,
-            $label,
-            $source,
-            $raw,
-            $iso2,
-            $profile_type_lms,
-            $profile_type_other_lms,
-            $gender_lms,
-            $age_range_lms,
-            $age_parts['min'],
-            $age_parts['max'],
-            $age_parts['mid'],
-            $phone,
-            $billing_phone,
-            $u ? (string) $u->user_url : '',
-            $meta_json,
-        ];
+        /*
+         * El bloque demográfico se arma recorriendo la MISMA constante que
+         * genera el encabezado, así el orden no puede desincronizarse. Una
+         * celda vacía significa que ese usuario se registró antes de que el
+         * campo existiera en el formulario: no se rellena con nada.
+         */
+        $demographic = [];
+        foreach ( self::DEMOGRAPHIC_FIELDS as $meta_key => $unused_label ) {
+            $demographic[] = (string) ( $meta[ $meta_key ] ?? '' );
+
+            if ( 'age_range_lms' === $meta_key ) {
+                $demographic[] = $age_parts['min'];
+                $demographic[] = $age_parts['max'];
+                $demographic[] = $age_parts['mid'];
+            }
+        }
+
+        $contact_pii = [];
+        if ( $include_pii ) {
+            foreach ( self::CONTACT_PII_FIELDS as $meta_key => $unused_label ) {
+                $contact_pii[] = (string) ( $meta[ $meta_key ] ?? '' );
+            }
+        }
+
+        return array_merge(
+            [
+                $user_id,
+                $u ? (string) $u->user_login        : '',
+                $first,
+                $last,
+                $u ? (string) $u->display_name       : '',
+                $u ? (string) $u->user_email         : '',
+                $u && is_array( $u->roles ) ? implode( ',', $u->roles ) : '',
+                $caps_json,
+                $desc,
+                $u ? (string) $u->user_registered    : '',
+                // Un usuario borrado no está en el set: cae en 'no'. Correcto, se
+                // registró en algún momento del pasado, no dentro del período.
+                isset( $this->registered_in_period[ $user_id ] ) ? 'sí' : 'no',
+            ],
+            $demographic,
+            $contact_pii,
+            [
+                $locale,
+                $label,
+                $source,
+                $raw,
+                $iso2,
+                $phone,
+                $billing_phone,
+                $u ? (string) $u->user_url : '',
+                $meta_json,
+            ]
+        );
     }
 
     // ──────────────────────────────────────────────────────────────────────
     // Batch: usermeta de todos los usuarios en 1 query (por chunk de 2000)
     // ──────────────────────────────────────────────────────────────────────
 
-    private function get_user_meta_batch( array $user_ids ) {
+    private function get_user_meta_batch( array $user_ids, $include_pii = true ) {
         global $wpdb;
 
         if ( empty( $user_ids ) ) return [];
 
-        $meta_keys = [
-            'first_name', 'last_name', 'description',
-            'profile_type_lms', 'profile_type_other_lms',
-            'gender_lms', 'age_range_lms',
-            'phone', 'billing_phone',
-            $wpdb->prefix . 'capabilities',
-        ];
+        /*
+         * Se alarga el IN, no se agregan consultas: sigue siendo UNA query por
+         * cada 2.000 usuarios. Las claves de PII solo entran si el filtro las
+         * habilita, así que con el filtro apagado ni se leen de la base.
+         */
+        $meta_keys = array_merge(
+            [
+                'first_name', 'last_name', 'description',
+                'phone', 'billing_phone',
+                $wpdb->prefix . 'capabilities',
+            ],
+            array_keys( self::DEMOGRAPHIC_FIELDS ),
+            $include_pii ? array_keys( self::CONTACT_PII_FIELDS ) : []
+        );
 
         $key_placeholders = implode( ',', array_fill( 0, count( $meta_keys ), '%s' ) );
         $map = [];
