@@ -7,6 +7,7 @@ require_once E3A_PATH . 'includes/Support/DatePeriod.php';
 require_once E3A_PATH . 'includes/Support/Math.php';
 require_once E3A_PATH . 'includes/Support/Xlsx.php';
 require_once E3A_PATH . 'includes/Support/CountryHelper.php';
+require_once E3A_PATH . 'includes/Support/CountryResolver.php';
 require_once E3A_PATH . 'includes/Support/BucketHelper.php';
 require_once E3A_PATH . 'includes/Repositories/UsersRepository.php';
 require_once E3A_PATH . 'includes/Repositories/EnrollmentsRepository.php';

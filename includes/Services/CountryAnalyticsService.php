@@ -2,14 +2,12 @@
 namespace E3_Analytics\Services;
 
 use E3_Analytics\Support\DatePeriod;
-use E3_Analytics\Support\CountryHelper;
+use E3_Analytics\Support\CountryResolver;
 use E3_Analytics\Integrations\TutorLms;
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 final class CountryAnalyticsService {
-    use CountryHelper;
-
     public function get_report( $period_override = null ) {
         $dates = DatePeriod::resolve( $period_override );
 
@@ -341,62 +339,31 @@ final class CountryAnalyticsService {
         return array_values( array_filter( array_unique( $ids ) ) );
     }
 
+    /**
+     * uid => etiqueta de país, delegando en el resolver unificado.
+     *
+     * La lógica vivía duplicada acá y en CountryUsersExportService. Ahora las
+     * dos consumen CountryResolver, que agrega _pais como tercera fuente y
+     * canonicaliza a ISO-2 antes de agrupar: sin eso "Colombia" y "CO" caían en
+     * dos filas distintas del mismo listado.
+     *
+     * @param int[] $user_ids
+     * @return array<int,string>
+     */
     private function get_country_map_for_users( $user_ids ) {
-        global $wpdb;
-
         $user_ids = array_values( array_filter( array_map( 'intval', is_array( $user_ids ) ? $user_ids : [] ) ) );
         if ( empty( $user_ids ) ) return [];
 
+        $resolver = new CountryResolver();
+        $resolved = $resolver->resolve_for_users( $user_ids );
+
         $map = [];
-
-        // Primary: country_lms
-        $in = implode( ',', array_fill( 0, count( $user_ids ), '%d' ) );
-        $sql = "SELECT user_id, meta_value FROM {$wpdb->usermeta} WHERE meta_key = 'country_lms' AND user_id IN ($in)";
-        $prepared = $wpdb->prepare( $sql, $user_ids );
-        $rows = $wpdb->get_results( $prepared, ARRAY_A );
-        foreach ( (array) $rows as $r ) {
-            $uid = (int) ( $r['user_id'] ?? 0 );
-            $val = isset( $r['meta_value'] ) ? trim( (string) $r['meta_value'] ) : '';
-            if ( $uid > 0 && $val !== '' ) {
-                $map[ $uid ] = $this->normalize_country_label( $val );
-            }
-        }
-
-        // Secondary: tutor_login_* JSON (último login). Tomamos el meta más reciente por usuario.
-        $missing = [];
-        foreach ( $user_ids as $uid ) {
-            if ( ! isset( $map[ $uid ] ) ) $missing[] = (int) $uid;
-        }
-
-        if ( ! empty( $missing ) ) {
-            foreach ( array_chunk( $missing, 2000 ) as $chunk ) {
-                $in2 = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
-                $sql2 = "SELECT umeta_id, user_id, meta_key, meta_value
-                         FROM {$wpdb->usermeta}
-                         WHERE user_id IN ($in2)
-                           AND meta_key LIKE 'tutor_login_%'
-                         ORDER BY umeta_id DESC";
-                $rows2 = $wpdb->get_results( $wpdb->prepare( $sql2, $chunk ), ARRAY_A );
-
-                foreach ( (array) $rows2 as $r ) {
-                    $uid = (int) ( $r['user_id'] ?? 0 );
-                    if ( $uid <= 0 || isset( $map[ $uid ] ) ) continue;
-
-                    $raw = trim( (string) ( $r['meta_value'] ?? '' ) );
-                    if ( $raw === '' ) continue;
-
-                    $json = json_decode( $raw, true );
-                    if ( ! is_array( $json ) ) continue;
-
-                    $code = isset( $json['country'] ) ? trim( (string) $json['country'] ) : '';
-                    if ( $code !== '' ) {
-                        $map[ $uid ] = $this->normalize_country_label( $this->iso2_to_name( $code ) );
-                    }
-                }
+        foreach ( $resolved as $uid => $r ) {
+            if ( '' !== $r['label'] ) {
+                $map[ $uid ] = $r['label'];
             }
         }
 
         return $map;
     }
-
 }

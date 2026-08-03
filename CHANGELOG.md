@@ -1,5 +1,58 @@
 # Changelog — E3 Analytics Dashboard
 
+## 1.3.5
+
+### El análisis por país estaba calculando sobre el 59% de la gente
+
+En la base conviven tres formularios de registro de distintas épocas, y cada uno
+guardó el país en un lugar y un formato distintos:
+
+| Fuente | Formato | Usuarios |
+|--------|---------|----------|
+| `country_lms` | nombre ("Colombia") | 1.574 |
+| `tutor_login_*` | ISO-2, dentro de un JSON | pocos |
+| `_pais` | ISO-2 ("CO") | 1.182 |
+
+El plugin leía las dos primeras e **ignoraba `_pais` por completo**. Los dos
+conjuntos son casi disjuntos: solo 31 usuarios tenían ambos. Resultado: **1.143
+personas invisibles** en todo el módulo de país.
+
+**Cobertura: 1.669 → 2.812 usuarios resueltos.**
+
+### Resolver unificado
+
+La resolución estaba duplicada, casi literal, en `CountryAnalyticsService` y
+`CountryUsersExportService`. Ahora vive en `Support/CountryResolver.php` y las dos
+consumen de ahí.
+
+Precedencia: `country_lms` → `tutor_login_*` → `_pais` → sin dato. El campo
+vigente manda; `_pais` solo cubre lo que los otros dos no.
+
+**Canónico interno ISO-2.** Sin esto, "Colombia" y "CO" aparecían como dos filas
+distintas del mismo listado. El mapa nombre→ISO-2 se construye en tiempo de
+ejecución invirtiendo `iso2_to_name()` sobre los códigos ISO-3166-1: con `intl`
+cubre los 249 países, sin `intl` queda en los 14 del mapa fijo. Lo que no mapea
+conserva su nombre como bucket propio y se contabiliza aparte — hoy no hay
+ninguno.
+
+### Export de País: cuatro columnas nuevas
+
+`Código de país` · `País` · `Origen del dato` · `Valor original`
+
+`Origen del dato` dice de qué formulario salió cada valor: **Formulario actual**,
+**Último acceso**, **Formulario anterior** o **Sin dato**. Con tres formularios
+conviviendo, es lo que permite auditar un número raro sin abrir la base.
+
+### Costo
+
+- **Página de país: 7 consultas antes, 7 después.** Las tres fuentes se traen en
+  una sola consulta por bloque de 2.000 usuarios, donde antes eran dos separadas.
+- **Export de País: 10 → 9.** Una consulta menos.
+
+El transient de país mantiene su TTL de 60 s y su clave no cambia, así que
+después del deploy puede devolver números viejos **hasta un minuto**. No hace
+falta invalidar nada.
+
 ## 1.3.3
 
 ### Columnas demográficas en el export de País

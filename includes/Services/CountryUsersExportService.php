@@ -2,7 +2,7 @@
 namespace E3_Analytics\Services;
 
 use E3_Analytics\Support\DatePeriod;
-use E3_Analytics\Support\CountryHelper;
+use E3_Analytics\Support\CountryResolver;
 use E3_Analytics\Repositories\UsersRepository;
 use E3_Analytics\Integrations\TutorLms;
 
@@ -15,8 +15,6 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  * Hoja "Usuarios": columnas fijas de perfil + columnas dinámicas de % avance por curso.
  */
 final class CountryUsersExportService {
-    use CountryHelper;
-
     /**
      * Set de IDs registrados dentro del período, con los IDs como CLAVES.
      * Lo llena get_user_universe_ids() reusando la query que ya hacía.
@@ -185,7 +183,7 @@ final class CountryUsersExportService {
             $include_pii ? array_values( self::CONTACT_PII_FIELDS ) : [],
             [
                 'locale',
-                'country_resolved', 'country_source', 'country_lms_raw', 'tutor_login_country_iso2',
+                'Código de país', 'País', 'Origen del dato', 'Valor original',
                 'phone', 'billing_phone', 'user_url', 'meta_json',
             ]
         );
@@ -275,11 +273,19 @@ final class CountryUsersExportService {
             $caps_json = $caps_val;
         }
 
-        // País
-        $label  = (string) ( $country_details['label'] ?? 'Desconocido' );
-        $source = (string) ( $country_details['source'] ?? 'unknown' );
-        $raw    = (string) ( $country_details['country_lms_raw'] ?? '' );
-        $iso2   = (string) ( $country_details['tutor_login_iso2'] ?? '' );
+        /*
+         * País, resuelto por CountryResolver. 'Origen del dato' es lo que le
+         * permite a la clienta saber de qué formulario salió cada valor: hoy
+         * conviven tres.
+         */
+        $iso2   = (string) ( $country_details['iso2'] ?? '' );
+        $label  = (string) ( $country_details['label'] ?? '' );
+        $source = CountryResolver::source_label( (string) ( $country_details['source'] ?? '' ) );
+        $raw    = (string) ( $country_details['raw'] ?? '' );
+
+        if ( '' === $label ) {
+            $label = 'Desconocido';
+        }
 
         // meta_json completo (opcional, costoso)
         $meta_json = '';
@@ -331,10 +337,10 @@ final class CountryUsersExportService {
             $contact_pii,
             [
                 $locale,
+                $iso2,
                 $label,
                 $source,
                 $raw,
-                $iso2,
                 $phone,
                 $billing_phone,
                 $u ? (string) $u->user_url : '',
@@ -547,75 +553,23 @@ final class CountryUsersExportService {
         return $ids;
     }
 
+    /**
+     * uid => ['iso2','label','source','raw'], delegando en el resolver unificado.
+     *
+     * La lógica vivía duplicada acá y en CountryAnalyticsService. Ahora las dos
+     * consumen CountryResolver, que agrega _pais como tercera fuente y
+     * canonicaliza a ISO-2 antes de agrupar.
+     *
+     * @param int[] $user_ids
+     * @return array<int,array{iso2:string,label:string,source:string,raw:string}>
+     */
     private function get_country_details_for_users( $user_ids ) {
-        global $wpdb;
-
         $user_ids = array_values( array_filter( array_map( 'intval', is_array( $user_ids ) ? $user_ids : [] ) ) );
         if ( empty( $user_ids ) ) return [];
 
-        $out = [];
-        foreach ( $user_ids as $uid ) {
-            $out[ $uid ] = [
-                'label'            => 'Desconocido',
-                'source'           => 'unknown',
-                'country_lms_raw'  => '',
-                'tutor_login_iso2' => '',
-            ];
-        }
+        $resolver = new CountryResolver();
 
-        foreach ( array_chunk( $user_ids, 2000 ) as $chunk ) {
-            $in  = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
-            $sql = "SELECT user_id, meta_value FROM {$wpdb->usermeta} WHERE meta_key = 'country_lms' AND user_id IN ($in)";
-            $rows = $wpdb->get_results( $wpdb->prepare( $sql, $chunk ), ARRAY_A );
-
-            foreach ( (array) $rows as $r ) {
-                $uid = (int) ( $r['user_id'] ?? 0 );
-                if ( $uid <= 0 || ! isset( $out[ $uid ] ) ) continue;
-                $raw = isset( $r['meta_value'] ) ? trim( (string) $r['meta_value'] ) : '';
-                if ( $raw === '' ) continue;
-                $out[ $uid ]['country_lms_raw'] = $raw;
-                $out[ $uid ]['label']           = $this->normalize_country_label( $raw );
-                $out[ $uid ]['source']          = 'country_lms';
-            }
-        }
-
-        $missing = [];
-        foreach ( $user_ids as $uid ) {
-            if ( $out[ $uid ]['source'] === 'unknown' ) $missing[] = $uid;
-        }
-
-        if ( ! empty( $missing ) ) {
-            foreach ( array_chunk( $missing, 2000 ) as $chunk ) {
-                $in2  = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
-                $sql2 = "SELECT umeta_id, user_id, meta_value
-                         FROM {$wpdb->usermeta}
-                         WHERE user_id IN ($in2)
-                           AND meta_key LIKE 'tutor_login_%'
-                         ORDER BY umeta_id DESC";
-                $rows2 = $wpdb->get_results( $wpdb->prepare( $sql2, $chunk ), ARRAY_A );
-
-                foreach ( (array) $rows2 as $r ) {
-                    $uid = (int) ( $r['user_id'] ?? 0 );
-                    if ( $uid <= 0 || ! isset( $out[ $uid ] ) ) continue;
-                    if ( $out[ $uid ]['source'] !== 'unknown' ) continue;
-
-                    $raw = trim( (string) ( $r['meta_value'] ?? '' ) );
-                    if ( $raw === '' ) continue;
-
-                    $json = json_decode( $raw, true );
-                    if ( ! is_array( $json ) ) continue;
-
-                    $iso2 = isset( $json['country'] ) ? strtoupper( trim( (string) $json['country'] ) ) : '';
-                    if ( $iso2 === '' ) continue;
-
-                    $out[ $uid ]['tutor_login_iso2'] = $iso2;
-                    $out[ $uid ]['label']            = $this->normalize_country_label( $this->iso2_to_name( $iso2 ) );
-                    $out[ $uid ]['source']           = 'tutor_login';
-                }
-            }
-        }
-
-        return $out;
+        return $resolver->resolve_for_users( $user_ids );
     }
 
     private function flatten_user_meta_json( $user_id ) {

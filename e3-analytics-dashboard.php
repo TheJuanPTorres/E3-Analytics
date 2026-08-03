@@ -3,7 +3,7 @@
  * Plugin Name: E3 Analytics Dashboard
  * Description: Panel de KPIs personalizados para Tutor LMS: registros, inscripciones, progreso, actividad, abandono, rendimiento, retención (7 días → histórico) y comportamiento DAU/MAU.
  * Author: Juan Pablo Torres
- * Version: 1.3.4
+ * Version: 1.3.5
  * Requires PHP: 8.1
  * Requires at least: 6.0
  * Text Domain: e3-analytics
@@ -14,7 +14,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'E3A_VERSION', '1.3.4' );
+define( 'E3A_VERSION', '1.3.5' );
 define( 'E3A_PATH', plugin_dir_path( __FILE__ ) );
 define( 'E3A_URL', plugin_dir_url( __FILE__ ) );
 
